@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- `npm run deploy` overwrote a `PUBLIC_URL` set in `.env` with the address Telnyx reports (and shipped twice). A `PUBLIC_URL` in `.env` now always wins, so a custom domain can be used for the links in emails; Telnyx's own address is recorded as `invokeUrl` in `.edge/function.json`.
+
 - (Unreleased page, caught before release) The overview showed every digest as an invalid definition: it parsed definition text that the list doesn't include. It now uses the list's summary fields.
 
 - Links built from the incoming request said `http://`, because TLS ends before the function: the feedback page's change, undo and reason links and its "View the digest" link. The router now treats requests as `https://` (honouring `X-Forwarded-Proto`; localhost unchanged), so these links and the new sign-in links are `https://` and the `Secure` session cookie works.

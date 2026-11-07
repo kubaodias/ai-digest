@@ -119,21 +119,24 @@ function ship() {
 say(`Shipping ${state.functionName} (${state.functionId})`);
 ship();
 
-// 5. public URL
+// 5. public URL: PUBLIC_URL from .env wins (e.g. a custom domain); otherwise the address Telnyx gives the function
 const inspected = run("telnyx-edge", ["inspect", state.functionName], { quiet: true });
-const url = inspected.match(/Invoke URL\s+(\S+)/)?.[1];
-if (!url) throw new Error("couldn't read the function's Invoke URL from telnyx-edge inspect");
-if (url !== state.publicUrl || url !== knownUrl) {
+const invokeUrl = inspected.match(/Invoke URL\s+(\S+)/)?.[1];
+if (!invokeUrl) throw new Error("couldn't read the function's Invoke URL from telnyx-edge inspect");
+const url = (env.PUBLIC_URL || invokeUrl).replace(/\/+$/, "");
+if (url !== state.publicUrl || invokeUrl !== state.invokeUrl || url !== knownUrl) {
   state.publicUrl = url;
+  state.invokeUrl = invokeUrl;
   writeState(state);
-  await setSecret("PUBLIC_URL", url);
   if (url !== knownUrl) {
+    await setSecret("PUBLIC_URL", url);
     say(`Public URL is ${url}: shipping again so emails link to it`);
     ship();
   }
 }
-const health = await fetch(`${url}/v1/health`).then((r) => r.json()).catch((e) => ({ error: String(e) }));
-console.log(`  ${url}/v1/health → ${JSON.stringify(health)}`);
+const health = await fetch(`${invokeUrl}/v1/health`).then((r) => r.json()).catch((e) => ({ error: String(e) }));
+console.log(`  ${invokeUrl}/v1/health → ${JSON.stringify(health)}`);
+if (url !== invokeUrl) console.log(`  Public URL (links in emails): ${url}`);
 
 // 6. digests
 const digestsDir = join(root, "digests");
