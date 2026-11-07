@@ -12,12 +12,16 @@
 //   POST   /v1/digests/<id>/runs          operator token   start a run: {"message"?, "run"?}
 //   GET    /v1/runs/<conversation>        operator token   the conversation's recent runs
 //
+//   GET    /v1/app[/…]                    session cookie   the digests page (src/app.ts; magic-link sign-in)
+//
 //   GET    /agents/ai-digest/feedback?…   signed links     same as /v1/feedback (links in emails sent before 0.2.0)
 
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
 import { mayUseFrontDoor } from "./auth.ts";
 import { SECRET, secret } from "./config.ts";
 import { ID_PATTERN, ProfileError, parseProfile, runConversation, runMessage } from "./profile.ts";
+import { app } from "./app.ts";
+import { parseRecipients } from "./config.ts";
 
 export const VERSION = "0.2.1";
 export const FEEDBACK_ACTOR = "feedback";
@@ -27,7 +31,40 @@ export const DIGESTS_ACTOR = "digests";
 export interface RouterEnv {
   AI_DIGEST: { idFromName(name: string): any };
   SECRETS?: { get(name: string): Promise<string> };
+  TELNYX?: { get(path: string, opts?: unknown): Promise<any>; post(path: string, opts: { body: unknown }): Promise<any> };
   [k: string]: unknown;
+}
+
+const MEMORY = "/ai/memory/namespaces/ai-digest/profiles";
+
+/** The digests page, with what it needs from the actors, Agent Memory and Email. */
+async function appRoute(req: Request, env: RouterEnv): Promise<Response> {
+  const s = (n: string) => secret(env as any, n);
+  const [authKey, feedbackKey, admin, defaultTo, from] = await Promise.all([s(SECRET.authKey), s(SECRET.feedbackKey), s(SECRET.adminEmail), s(SECRET.emailTo), s(SECRET.emailFrom)]);
+  const t = env.TELNYX;
+  return app(req, {
+    authKey,
+    feedbackKey,
+    adminEmail: admin || parseRecipients(defaultTo)[0],
+    digests: env.AI_DIGEST.idFromName(DIGESTS_ACTOR),
+    feedback: env.AI_DIGEST.idFromName(FEEDBACK_ACTOR),
+    memory: {
+      async counts() {
+        const r = await t!.get(MEMORY);
+        return Object.fromEntries((r?.data ?? []).map((p: any) => [p.profile_id, p.memory_count]));
+      },
+      async summary(profile: string) {
+        const r = await t!.get(`${MEMORY}/${encodeURIComponent(profile)}/summary`);
+        // Agent Memory builds a summary only when asked: ask for next time when it's missing or stale.
+        if (!r?.data?.text || r?.data?.is_stale) await t!.get(`${MEMORY}/${encodeURIComponent(profile)}/summary`, { query: { refresh: "true" } }).catch(() => undefined);
+        return r?.data?.text ?? null;
+      },
+    },
+    async sendEmail(to, subject, text, html) {
+      if (!t || !from) throw new Error("email isn't configured (DIGEST_EMAIL_FROM)");
+      await t.post("/emails", { body: { from, to: [to], subject, text_body: text, html_body: html } });
+    },
+  });
 }
 
 const json = (status: number, body: unknown) =>
@@ -52,6 +89,7 @@ export async function route(req: Request, env: RouterEnv): Promise<Response> {
   if (method === "GET" && path === "/v1/assets/thumb-up.png") return png(THUMB_UP_PNG_BASE64);
   if (method === "GET" && path === "/v1/assets/thumb-down.png") return png(THUMB_DOWN_PNG_BASE64);
   if (method === "GET" && (path === "/v1/feedback" || path === "/agents/ai-digest/feedback")) return actor(FEEDBACK_ACTOR).fetch(req);
+  if (path === "/v1/app" || path.startsWith("/v1/app/")) return appRoute(req, env);
 
   // Everything else needs the operator token.
   if (!path.startsWith("/v1/")) return json(404, { error: "not_found", message: "see /v1/health; the API lives under /v1" });

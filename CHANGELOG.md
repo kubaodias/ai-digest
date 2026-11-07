@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **The digests page**, `/v1/app` on your function (read-only). The overview shows every digest with its settings, last issue, vote count and memory size. A digest's page shows its settings, description and raw definition file, its recent issues (each opens the sent email via a signed view link), what it learned from your votes (products and companies, topics, tentative topics, sources) and its Agent Memory summary.
+- **Magic-link sign-in** for the page: the link is emailed to `ADMIN_EMAIL` (new, optional) or the first `DIGEST_EMAIL_TO`, works once, expires in 15 minutes, and at most one is sent per minute. It sets a signed session cookie for 30 days. Keys are derived from `AGENT_AUTH_KEY`, so no new secret is needed.
+- `npm run deploy` prints the page's address; screenshots of the page in the docs.
+
 ## [0.2.1] - 2026-11-07
 
 ### Fixed

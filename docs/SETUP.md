@@ -67,6 +67,7 @@ Edit `.env`:
 | `TELNYX_API_KEY` | no | Only if you didn't store it with `telnyx-edge auth api-key set` |
 | `AGENT_AUTH_KEY` | no | Leave empty; the first deploy creates it and writes it here |
 | `FEEDBACK_KEY` | no | Leave empty; a random link-signing key is generated and stored on Telnyx |
+| `ADMIN_EMAIL` | no | Where sign-in links for the digests page go (default: the first `DIGEST_EMAIL_TO` address) |
 | `FUNCTION_NAME` | no | The function's name on Edge Compute (default `ai-digest`) |
 
 `.env` is git-ignored. The deploy stores the agent's settings as [Edge Compute secrets](https://developers.telnyx.com/docs/edge-compute/platform-overview) on your account, where the function reads them.
@@ -148,7 +149,17 @@ npm run digests -- delete <id>        # its sent issues, votes and memory stay
 
 Editing a digest only needs `push`, not a deploy. The function keeps the last 10 versions of each definition.
 
-## 8. Run digests on a schedule
+## 8. Your digests page
+
+The deploy prints its address: `https://<your function>/v1/app`. Open it and click **Email me a sign-in link**. The link goes to `ADMIN_EMAIL` (or the first `DIGEST_EMAIL_TO` address), works once and expires in 15 minutes; clicking it signs you in for 30 days on that browser. At most one link is sent per minute.
+
+The page is read-only. It shows:
+- **every digest:** its settings, last issue, vote count and memory size;
+- **each digest:** its settings and description (and the raw file), its recent issues (each opens the sent email), what it learned from your votes, and its Agent Memory summary.
+
+Sign-in links and sessions are signed with keys derived from `AGENT_AUTH_KEY`, so changing that key signs every browser out.
+
+## 9. Run digests on a schedule
 
 Built-in scheduling is planned. Until then, trigger runs from anywhere that has the repo and `.env`, e.g. cron on a machine you control:
 
@@ -166,7 +177,7 @@ curl -X POST "$URL/v1/digests/ai-swe/runs" \
 
 where `$TOKEN` is the hex HMAC-SHA256 of the text `telnyx-acp operator` keyed with `AGENT_AUTH_KEY` (`node -e "console.log(require('crypto').createHmac('sha256', process.env.AGENT_AUTH_KEY).update('telnyx-acp operator').digest('hex'))"`). In GitHub Actions, store `AGENT_AUTH_KEY` and the URL as repository secrets.
 
-## 9. Give feedback
+## 10. Give feedback
 
 Each item ends with grey **Useful? 👍 👎** links. A click records the vote and opens a page where you can say why: one or more of "I don't use *product*", "not interested in *topics*", "already knew this" (or, on 👍, "more about *company*", "*source* is a good source"). Click a selected reason again to deselect it. Votes count only toward the digest they came from; the next issue of that digest ranks with them.
 

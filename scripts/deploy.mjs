@@ -79,11 +79,12 @@ await setSecret("DIGEST_EMAIL_TO", env.DIGEST_EMAIL_TO);
 // The link-signing key: never rotated here (that would break links in emails already sent).
 if (env.FEEDBACK_KEY) await setSecret("FEEDBACK_KEY", env.FEEDBACK_KEY);
 else if (!existing.has("FEEDBACK_KEY")) await setSecret("FEEDBACK_KEY", randomBytes(32).toString("hex"));
+if (env.ADMIN_EMAIL) await setSecret("ADMIN_EMAIL", env.ADMIN_EMAIL);
 const knownUrl = env.PUBLIC_URL || state.publicUrl;
 if (knownUrl) await setSecret("PUBLIC_URL", knownUrl);
 
 // 4. build and ship
-const SECRETS = ["AGENT_AUTH_KEY", "DIGEST_EMAIL_FROM", "DIGEST_EMAIL_TO", "FEEDBACK_KEY", "PUBLIC_URL"];
+const SECRETS = ["AGENT_AUTH_KEY", "DIGEST_EMAIL_FROM", "DIGEST_EMAIL_TO", "FEEDBACK_KEY", "PUBLIC_URL", ...(env.ADMIN_EMAIL || existing.has("ADMIN_EMAIL") ? ["ADMIN_EMAIL"] : [])];
 function writeBuild() {
   mkdirSync(edgeDir, { recursive: true });
   writeFileSync(
@@ -160,4 +161,4 @@ const instructions = readFileSync(join(root, "docs/memory-summary-instructions.m
 await telnyx(env, "PATCH", "/ai/memory/namespaces/ai-digest/settings", { summary: { instructions } });
 console.log("  ✓ applied");
 
-say(`Done. Start a digest:\n  npm run digests -- run ${files[0]?.replace(/\.md$/, "") ?? "<digest>"}`);
+say(`Done.\n  Your digests: ${url}/v1/app\n  Start one:    npm run digests -- run ${files[0]?.replace(/\.md$/, "") ?? "<digest>"}`);

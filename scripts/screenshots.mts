@@ -11,6 +11,8 @@ import puppeteer from "puppeteer-core";
 import { renderEmailHtml } from "../src/agent.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "../src/assets.ts";
 import { addFeedbackLinks, digestItems, nextVote, preferencesFrom, thanksPage, type DigestItemRecord } from "../src/feedback.ts";
+import { digestPage, listPage } from "../src/app.ts";
+import { computePreferences } from "../src/preferences.ts";
 
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const OUT = new URL("../docs/images/", import.meta.url).pathname;
@@ -50,6 +52,27 @@ const server = http.createServer(async (req, res) => {
     const reasons = { "entity:0": "#", "entity:1": "#", "entity:2": "#", topic: "#", known: "#" };
     return send(await thanksPage({ base: feedback, vote, item, prefs: preferencesFrom([vote]), links: { undo: "#", flip: "#", view: "#", reasons } }).text(), "text/html");
   }
+  // The digests page (/v1/app), with sample data.
+  const ex = (n: string) => readFile(new URL(`../examples/digests/${n}.md`, import.meta.url), "utf8");
+  const stored = [
+    { id: "agent-memory", markdown: await ex("agent-memory"), updatedAt: "2026-11-07T22:00:00Z", versions: 2 },
+    { id: "ai-swe", markdown: await ex("ai-swe"), updatedAt: "2026-11-07T21:30:00Z", versions: 1 },
+  ];
+  const issues = [
+    { id: "20261107-8xxl", profile: "agent-memory", subject: "Agent Memory Weekly — Oct 25 – Nov 8, 2026", sentAt: "2026-11-07T22:11:56Z", items: 7 },
+    { id: "20261031-q1zr", profile: "agent-memory", subject: "Agent Memory Weekly — Oct 18 – Nov 1, 2026", sentAt: "2026-10-31T08:00:00Z", items: 8 },
+    { id: "20261107-gfar", profile: "ai-swe", subject: "AI & Software Engineering Digest — 1–7 November 2026", sentAt: "2026-11-07T10:20:00Z", items: 13 },
+  ];
+  if (url.pathname === "/app") return send(await listPage(stored, { issues, votes: { "agent-memory": 3, "ai-swe": 5 } }, { "agent-memory": 4, "ai-swe": 8 }).text(), "text/html");
+  if (url.pathname === "/app-digest") {
+    const prefs = computePreferences([
+      { vote: "up", headline: "Mem0 state of memory", tags: ["agent memory", "benchmarks"], entities: ["mem0"], source: "mem0.ai", reasons: [{ r: "entity", target: "mem0" }], at: "2026-11-07T21:37:00Z" },
+      { vote: "up", headline: "Letta sleep-time compute", tags: ["agent memory", "retrieval"], entities: ["letta"], source: "letta.com", reasons: [{ r: "topic" }], at: "2026-11-07T21:40:00Z" },
+      { vote: "down", headline: "Membase launch", tags: ["agent memory", "dev tooling"], entities: ["membase"], source: "unibase.io", reasons: [{ r: "entity", target: "membase" }], at: "2026-11-07T22:13:00Z" },
+    ]);
+    const summary = "## Wants more of\n- **Mem0** — liked the state-of-memory report with benchmark numbers (7 Nov 2026).\n- **Retrieval for agents** — wants more on retrieval and context management (7 Nov 2026).\n\n## Wants less of\n- **Membase** — doesn't use it (7 Nov 2026).";
+    return send(await digestPage({ digest: stored[0]!, issues: issues.filter((i) => i.profile === "agent-memory").map((issue) => ({ issue, view: "#" })), prefs, memorySummary: summary, memoryCount: 4 }).text(), "text/html");
+  }
   res.statusCode = 404;
   res.end();
 });
@@ -75,5 +98,7 @@ await shoot("/email", "email-top.png", 700, async () => ({ y: 0, height: 1250 })
 await shoot("/email", "email-diagrams.png", 700, async (p) => ({ ...(await headingTop("Git's backend")(p)), height: 1250 }));
 await shoot("/email", "email-footer.png", 700, async (p) => ({ y: await p.evaluate(() => document.body.scrollHeight - 260), height: 260 }));
 await shoot("/feedback", "feedback-page.png", 480);
+await shoot("/app", "app-digests.png", 900, async () => ({ y: 0, height: 720 }));
+await shoot("/app-digest", "app-digest.png", 900);
 await browser.close();
 server.close();

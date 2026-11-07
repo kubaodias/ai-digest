@@ -16,10 +16,15 @@ It runs entirely on Telnyx: Edge Compute for hosting and durable state, Telnyx I
 - **Researches** each issue with about 25 web searches and page reads, using only items from the requested window and linking to the specific articles.
 - **Illustrates** items with pictures from the source articles, only when a vision model judges them informative for that digest's reader: charts, diagrams, product screenshots.
 - **Emails** every finished digest from your own domain, to the digest's recipients. Sending is done by code, not left to the model.
+- **Shows your digests on a page** at `/v1/app` on your function, behind a magic-link sign-in: each digest's settings and description, its recent issues, what it learned from your votes, and its Agent Memory summary.
 - **Learns per digest** from grey 👍/👎 links under each item. After a click you can say why, picking any number of reasons ("I don't use Postman", "not interested in this topic", "already knew it"). Each digest keeps its own vote log and Agent Memory profile, named after the digest.
 
 <p align="center">
   <img src="docs/images/email-diagrams.png" width="420" alt="A digest item about OpenAI's Git backend, illustrated with two diagrams taken from the article">
+</p>
+
+<p align="center">
+  <img src="docs/images/app-digest.png" width="560" alt="The digests page for one digest: settings, what it covers, recent issues, learned preferences and the Agent Memory summary">
 </p>
 
 ## A digest definition
@@ -48,6 +53,8 @@ npm run digests -- push               # upload digests/*.md to your function
 npm run digests -- run agent-memory   # start an issue now (3–5 minutes, then it's emailed)
 npm run digests -- list
 ```
+
+Then open `https://<your function>/v1/app` and sign in with the link it emails you.
 
 ## How it works
 
@@ -95,6 +102,7 @@ About 30 minutes, most of it waiting for DNS. The full guide with links is **[do
 | `src/instructions.ts` | How to research and write any digest |
 | `src/images.ts` | Picking pictures from the source articles |
 | `src/feedback.ts`, `src/preferences.ts` | Signed thumbs links, the feedback pages, votes into preferences |
+| `src/app.ts` | The digests page and its magic-link sign-in |
 | `src/config.ts`, `src/auth.ts` | Settings from Telnyx secrets; the operator token |
 | `examples/digests/` | Digest definitions to copy (your own go in the git-ignored `digests/`) |
 | `docs/memory-summary-instructions.md` | How Agent Memory summarises a digest reader's interests |

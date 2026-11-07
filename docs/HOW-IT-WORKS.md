@@ -29,6 +29,8 @@ The agent class extends the managed agent loop from `@telnyx/acp` (harness, tool
 | `DELETE /v1/digests/<id>` | operator token | Delete a definition (its issues, votes and memory stay) |
 | `POST /v1/digests/<id>/runs` | operator token | Start an issue: `{"message"?: "focus for this issue", "run"?: "name"}` → `202 {"conversation": …}` |
 | `GET /v1/runs/<conversation>` | operator token | The conversation's recent runs: `{"runs": [{status, durationMs, toolCalls, tokens, …}]}` |
+| `GET /v1/app`, `/v1/app/digests/<id>` | session cookie | The digests page (read-only) |
+| `GET`/`POST /v1/app/sign-in`, `GET /v1/app/auth?t=…`, `GET /v1/app/sign-out` | anyone | Magic-link sign-in: email a link (at most one a minute), use it (once, 15 minutes), sign out |
 | `GET /agents/ai-digest/feedback?…` | signed links | Same as `/v1/feedback`, for emails sent before 0.2.0 |
 
 The operator token is `Authorization: Bearer <hex HMAC-SHA256 of "telnyx-acp operator", keyed with AGENT_AUTH_KEY>` (`src/auth.ts`); `npm run digests` sends it. Errors are JSON: `{"error": …, "message": …}`.
@@ -154,6 +156,7 @@ Nothing is kept outside your Telnyx account and your machine. The agent never wr
 
 - **One HTTP surface.** The function's entry point routes every request; actors are only called in-process. Their own front doors (state streams, RPC) aren't reachable from outside, and the agent class refuses them without the operator token as a second line.
 - **The operator token** guards everything that changes or reveals data: managing digests, starting runs, run status. It's derived from `AGENT_AUTH_KEY`, which lives only in your `.env` and Telnyx secrets; the key itself never crosses the wire.
+- **The digests page** signs in by magic link: a signed token (HMAC-SHA256, purpose "magic", 15 minutes) emailed to `ADMIN_EMAIL` or the first `DIGEST_EMAIL_TO`, usable once (its nonce is recorded by the `digests` actor), at most one sent per minute. Using it sets a signed session cookie (purpose "session", 30 days, `HttpOnly; Secure; SameSite=Lax; Path=/v1/app`). Both keys are derived from `AGENT_AUTH_KEY`. The page is read-only and `noindex`.
 - **Feedback links** are signed (HMAC-SHA256 with `FEEDBACK_KEY`) and expire after 90 days. Without the key, nobody can forge votes. The feedback pages are `noindex` and `no-store`.
 - **The model can't choose who gets email:** recipients come from the digest's definition (stored privately on your function) or a secret.
 - **Your digests stay private:** `digests/` is git-ignored, and definitions are stored on your own function.

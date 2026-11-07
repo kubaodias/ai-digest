@@ -306,10 +306,10 @@ export function preferencesFrom(votes: StoredVote[]): Preferences {
 
 // ── pages ────────────────────────────────────────────────────────────────────
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 const icon = (base: string, name: "thumb-up.png" | "thumb-down.png", size = 18) => `<img src="${assetUrl(base, name)}" width="${size}" height="${size}" alt="" style="vertical-align:-3px">`;
 
-export function page(title: string, body: string, status = 200): Response {
+export function page(title: string, body: string, status = 200, opts: { css?: string; headers?: Record<string, string>; wide?: boolean } = {}): Response {
   return new Response(
     `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${esc(title)}</title>
 <style>
@@ -329,6 +329,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td{padding:6px 0;border
 .reasons{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.reason{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13px;color:var(--muted)}
 .reason.on{border-color:var(--link);color:var(--link)}.reason:hover{text-decoration:none;border-color:var(--faint)}
 footer{display:flex;align-items:center;justify-content:center;gap:8px;margin:22px 0 40px;font-size:12px;color:var(--faint)}footer a{color:var(--faint);text-decoration:underline}footer img{width:18px;height:18px}
+${opts.wide ? "main{max-width:880px}" : ""}${opts.css ?? ""}
 </style></head><body><main>${body}<footer><span>AI Digest · made with <a href="https://telnyx.com/products/edge-compute">Telnyx Edge Compute</a></span><img src="https://www.activepieces.com/piece-icon/telnyx" width="18" height="18" alt="Telnyx"></footer></main>
 <script>
 // Reason, change and undo links update this page in place and replace its history entry,
@@ -350,7 +351,7 @@ document.addEventListener("click", async (e) => {
   }
 });
 </script></body></html>`,
-    { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" } },
+    { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex", ...(opts.headers ?? {}) } },
   );
 }
 

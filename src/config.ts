@@ -20,6 +20,7 @@ export const SECRET = {
   publicUrl: "PUBLIC_URL",
   feedbackKey: "FEEDBACK_KEY",
   authKey: "AGENT_AUTH_KEY",
+  adminEmail: "ADMIN_EMAIL",
 } as const;
 
 export async function secret(env: ManagedEnv, name: string): Promise<string | undefined> {

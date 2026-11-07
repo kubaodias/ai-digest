@@ -388,6 +388,17 @@ export class AiDigest extends ManagedAgent {
     return { stored: record.id, dropped: drop.length };
   }
 
+  /** For the page: sent issues (newest first) and votes per digest. Called in-process; not @rpc. */
+  async appOverview() {
+    const state: any = await (this as any).getState();
+    const issues = (Object.values(state?.digests ?? {}).filter(Boolean) as DigestRecord[])
+      .map((d) => ({ id: d.id, profile: d.profile ?? LEGACY_PROFILE, subject: d.subject, sentAt: d.sentAt, items: d.items.length }))
+      .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
+    const votes: Record<string, number> = {};
+    for (const v of Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]) votes[v.profile ?? LEGACY_PROFILE] = (votes[v.profile ?? LEGACY_PROFILE] ?? 0) + 1;
+    return { issues, votes };
+  }
+
   /** One digest's preferences from the vote log, for `reader_preferences`. Called in-process; not @rpc. */
   async feedbackStats(profile: string = LEGACY_PROFILE) {
     const state: any = await (this as any).getState();
@@ -428,6 +439,26 @@ export class AiDigest extends ManagedAgent {
     await (this as any).setState({ profiles: { [id]: { id, markdown, updatedAt: new Date().toISOString(), history } } });
     console.log(JSON.stringify({ digests: prev ? "updated" : "created", id }));
     return { id, changed: true, versions: history.length + 1 };
+  }
+
+  /** Sign-in links: at most one a minute. Called in-process by the page. */
+  async magicRequested(now: number) {
+    const state: any = await (this as any).getState();
+    const last = state?.magicRequestedAt ?? 0;
+    if (now - last < 60_000) return { ok: false, retryIn: Math.ceil((60_000 - (now - last)) / 1000) };
+    await (this as any).setState({ magicRequestedAt: now });
+    return { ok: true };
+  }
+
+  /** A sign-in link works once: false when its nonce was used already. Expired nonces are forgotten. */
+  async consumeMagic(nonce: string, exp: number) {
+    const state: any = await (this as any).getState();
+    const used: Record<string, number> = state?.magicUsed ?? {};
+    if (used[nonce]) return false;
+    const nowS = Math.floor(Date.now() / 1000);
+    const expired = Object.fromEntries(Object.entries(used).filter(([, e]) => e < nowS).map(([n]) => [n, null]));
+    await (this as any).setState({ magicUsed: { ...expired, [nonce]: exp } });
+    return true;
   }
 
   /** Delete a digest's definition (its sent issues, votes and memory stay). */
