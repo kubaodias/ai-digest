@@ -66,6 +66,7 @@ Edit `.env`:
 | `PUBLIC_URL` | no | Leave empty; the first deploy fills it in |
 | `DIGEST_MEMORY_PROFILE` | no | Agent Memory profile for your feedback (default `reader`) |
 | `FEEDBACK_KEY` | no | Leave empty; a random link-signing key is generated and stored on Telnyx |
+| `AGENT_AUTH_KEY` | no | Leave empty; an operator key is generated, stored on Telnyx and saved for the CLI (see below) |
 
 `.env` is git-ignored. The deploy script stores these values as [Edge Compute secrets](https://developers.telnyx.com/docs/agents) on your account, where the agent reads them. `agent.json` only lists their names.
 
@@ -83,6 +84,8 @@ This:
 5. creates the `ai-digest` [Agent Memory](https://developers.telnyx.com/docs/agent-memory) namespace and applies [the summary instructions](memory-summary-instructions.md), which keep the profile about your interests only.
 
 `npx telnyx-acp status` shows the deployment and its address.
+
+**Who can use the address.** Starting runs and reading the agent's state need an operator token. The deploy stores an auth key as the `AGENT_AUTH_KEY` secret and saves it in `~/.telnyx-acp/auth-keys.json`, where `telnyx-acp invoke`, `chat`, `eval` and `traces` find it and send the token for you. Anyone else gets refused. The feedback links in emails work for whoever has the email: each one carries its own signature.
 
 ## 6. Get your first digest
 
@@ -123,9 +126,10 @@ jobs:
             "Weekly digest: the most important AI and software engineering news from the past 7 days." || true
         env:
           TELNYX_API_KEY: ${{ secrets.TELNYX_API_KEY }}
+          TELNYX_ACP_AUTH_KEY: ${{ secrets.TELNYX_ACP_AUTH_KEY }}
 ```
 
-Add `TELNYX_API_KEY` under the repository's **Settings → Secrets and variables → Actions**. The `|| true` is because `invoke` returns before the run finishes; the email is sent regardless. Plain `cron` on any machine with the CLI works the same way.
+Add `TELNYX_API_KEY` and `TELNYX_ACP_AUTH_KEY` under the repository's **Settings → Secrets and variables → Actions**. The auth key is the value saved for your agent's address in `~/.telnyx-acp/auth-keys.json`; the CLI also reads it from the `TELNYX_ACP_AUTH_KEY` variable, which is how a CI runner or a teammate's machine authenticates. The `|| true` is because `invoke` returns before the run finishes; the email is sent regardless. Plain `cron` on any machine with the CLI works the same way.
 
 ## 8. Give feedback
 
@@ -143,6 +147,7 @@ Each deploy is a new immutable version (`npx telnyx-acp versions ai-digest`). Yo
 
 | Symptom | Likely cause and fix |
 |---|---|
+| `invoke` is refused (no reply, or an authorization error) and the log shows `{"auth":"refused"}` | This machine doesn't have the agent's auth key. Copy it into `~/.telnyx-acp/auth-keys.json` under the agent's address, or set `TELNYX_ACP_AUTH_KEY`. If it's lost, set a new `AGENT_AUTH_KEY` in `.env` and run `npm run deploy`. |
 | `cannot reach … no answer in 30s` from `invoke` | Expected for long runs; the run continues. Check `traces` and `logs`. |
 | Log says `missing secrets: …` | Add them to `.env` and run `npm run deploy`, or `telnyx-acp add secret NAME`. |
 | Email arrives with no body | Something sent `text`/`html` instead of `text_body`/`html_body`; the Email API ignores unknown fields. This repo sends the right ones. |

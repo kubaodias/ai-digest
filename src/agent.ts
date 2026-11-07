@@ -7,7 +7,8 @@ import { addImages } from "./images.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
 import { DOWN_REASONS, UP_REASONS } from "./preferences.ts";
 import { digestFromReply } from "./digest.ts";
-import { SECRET, loadConfig, memoryProfile } from "./config.ts";
+import { SECRET, loadConfig, memoryProfile, secret } from "./config.ts";
+import { claimsFor } from "./auth.ts";
 import {
   FEEDBACK_CONVERSATION, KEEP_DIGESTS, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
@@ -190,6 +191,17 @@ export class AiDigest extends ManagedAgent {
     super(ctx, env, spec, { tools: emailTools(env, holder) });
     holder.actor = this;
     this.agentEnv = env;
+  }
+
+  /**
+   * RPC (starting runs, traces) and state reads over the public URL need the
+   * operator token the telnyx-acp CLI sends (see auth.ts). In-process calls
+   * between this agent's actors and the feedback routes don't come through here.
+   */
+  override async authorize(token?: string, _req?: Request): Promise<any> {
+    const claims = await claimsFor(token, await secret(this.agentEnv, SECRET.authKey));
+    if (!claims.length) console.log(JSON.stringify({ auth: "refused", conversation: this.conversationName() ?? null, token: token ? "wrong" : "none" }));
+    return claims;
   }
 
   /** A digest was emailed from this conversation now (guards against a second send for the same run). */

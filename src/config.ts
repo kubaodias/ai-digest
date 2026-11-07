@@ -22,11 +22,12 @@ export const SECRET = {
   publicUrl: "PUBLIC_URL",
   memoryProfile: "DIGEST_MEMORY_PROFILE",
   feedbackKey: "FEEDBACK_KEY",
+  authKey: "AGENT_AUTH_KEY",
 } as const;
 
 export const DEFAULT_MEMORY_PROFILE = "reader";
 
-async function secret(env: ManagedEnv, name: string): Promise<string | undefined> {
+export async function secret(env: ManagedEnv, name: string): Promise<string | undefined> {
   const store = (env as any).SECRETS;
   if (!store) return undefined;
   const v = await store.get(name).catch(() => "");

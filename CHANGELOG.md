@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Security
+
+- The agent's public URL now requires the operator token for RPC (starting runs, traces) and state reads. Before, anyone with the URL could start digests (emailed to the configured recipients) or read conversation state, including the vote log. The token is the one the `telnyx-acp` CLI already sends, derived from the agent's auth key (`AGENT_AUTH_KEY` secret, saved locally by `npm run deploy`). Feedback links, the digest view and icons are unaffected; they carry their own signatures.
+
+### Added
+
+- `AGENT_AUTH_KEY` setting in `.env.example`; `npm run deploy` generates the key, stores it on Telnyx and saves it to `~/.telnyx-acp/auth-keys.json`.
+- Tests for the token derivation (matches the CLI's) and the claims.
+
 ## [0.1.0] - 2026-11-07
 
 First public version.

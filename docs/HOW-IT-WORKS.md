@@ -126,7 +126,8 @@ Nothing is kept outside your Telnyx account. The agent never writes conversation
 
 ## Security notes
 
-- Feedback links are signed and expire. Without the key, nobody can forge votes.
+- **The public URL needs an operator token for RPC and state.** Starting runs, traces and state reads need a bearer token: HMAC-SHA256 of `telnyx-acp operator`, keyed with the agent's auth key (`src/auth.ts`). The CLI derives and sends it from `~/.telnyx-acp/auth-keys.json` or `TELNYX_ACP_AUTH_KEY`, and the agent derives the same token from its `AGENT_AUTH_KEY` secret, so the key never crosses the wire. Refusals are logged as `{"auth":"refused"}`. If the secret isn't set, the agent stays open rather than locking you out; `npm run deploy` always sets it.
+- Feedback links are signed and expire. Without the key, nobody can forge votes. They (and the digest view and icons) are served before the token check, so they work from the email.
 - The model can't choose who gets email: the recipients come from a secret.
 - The `feedback` actor's internal methods (`registerDigest`, `feedbackStats`) are reached in-process only. They aren't `@rpc`, so they're not exposed on the public URL.
 - The feedback pages are `noindex` and `no-store`.

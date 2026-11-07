@@ -8,7 +8,9 @@
 // instructions (docs/memory-summary-instructions.md).
 
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { loadEnv, readJson, root, run, say } from "./lib.mjs";
 
 const args = new Set(process.argv.slice(2));
@@ -48,6 +50,22 @@ else if (!spec().secrets?.includes("FEEDBACK_KEY")) setSecret("FEEDBACK_KEY", ra
 const publicUrl = env.PUBLIC_URL || spec().deployed?.mountUrl;
 if (publicUrl) setSecret("PUBLIC_URL", publicUrl);
 
+// The operator auth key: RPC and state reads on the public URL need the token derived from it (src/auth.ts).
+// The CLI finds it in ~/.telnyx-acp/auth-keys.json by the agent's origin (or TELNYX_ACP_AUTH_KEY) and sends the token.
+const keysFile = join(process.env.TELNYX_ACP_HOME ?? join(homedir(), ".telnyx-acp"), "auth-keys.json");
+const readKeys = () => { try { return JSON.parse(readFileSync(keysFile, "utf8")); } catch { return {}; } };
+const origin = (url) => new URL(url).origin;
+function saveLocalKey(url, key) {
+  if (dry) return;
+  mkdirSync(join(keysFile, ".."), { recursive: true, mode: 0o700 });
+  writeFileSync(keysFile, JSON.stringify({ ...readKeys(), [origin(url)]: key }, null, 2) + "\n", { mode: 0o600 });
+  chmodSync(keysFile, 0o600);
+  console.log(`  ✓ auth key saved for ${origin(url)} in ${keysFile}`);
+}
+const authKey = env.AGENT_AUTH_KEY || (publicUrl && readKeys()[origin(publicUrl)]) || randomBytes(32).toString("hex");
+setSecret("AGENT_AUTH_KEY", authKey);
+if (publicUrl) saveLocalKey(publicUrl, authKey);
+
 // 4. deploy
 function deploy() {
   if (dry) return console.log("  (dry run) would run telnyx-acp deploy");
@@ -63,6 +81,7 @@ if (!publicUrl && !dry) {
   if (!url) throw new Error("deploy finished but agent.json has no deployed.mountUrl");
   say(`First deploy: setting PUBLIC_URL to ${url} and deploying again`);
   setSecret("PUBLIC_URL", url);
+  saveLocalKey(url, authKey);
   deploy();
 }
 

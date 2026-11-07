@@ -7,7 +7,7 @@ Context for a coding agent working in this repository: a Telnyx ACP agent of the
 | `agent.json` | The AgentSpec: name, kind, model, tools, limits, secrets (names only). `deploy` adds a `deployed` block locally; a git filter strips it on commit | `telnyx-acp`, or you |
 | `src/agent.ts` | The agent class: post-run email delivery, the `feedback` HTTP routes, the email template | you |
 | `src/instructions.ts` | The research model's instructions | you |
-| `src/images.ts`, `src/feedback.ts`, `src/preferences.ts`, `src/digest.ts`, `src/config.ts` | Pictures, feedback, preference scoring, digest detection, settings from secrets | you |
+| `src/images.ts`, `src/feedback.ts`, `src/preferences.ts`, `src/digest.ts`, `src/config.ts`, `src/auth.ts` | Pictures, feedback, preference scoring, digest detection, settings from secrets, operator-token check | you |
 | `test/*.test.ts` | Regression tests, run with `npm test` (node:test, no network) | you |
 | `docs/` | Setup and design docs, screenshots (`npm run screenshots`), memory summary instructions | you |
 | `CHANGELOG.md` | Keep a Changelog; every change gets an entry under Unreleased | you |
