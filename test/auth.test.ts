@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { derive } from "@telnyx/acp/auth";
-import { claimsFor, operatorToken } from "../src/auth.ts";
+import { bearerToken, claimsFor, mayUseFrontDoor, operatorToken } from "../src/auth.ts";
 
 const KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -19,3 +19,14 @@ test("with an auth key: only the operator token gets read and rpc", async () => 
 test("without an auth key configured the agent stays open (no lock-out)", async () => {
   assert.deepEqual(await claimsFor(undefined, undefined), ["read", "rpc"]);
 });
+
+test("state streams and RPC need the token: requests without it are refused", async () => {
+  const url = "https://agent.example.com/agents/ai-digest/feedback?subscribe=state";
+  const good = new Request(url, { headers: { authorization: `Bearer ${await operatorToken(KEY)}` } });
+  assert.equal(bearerToken(good), await operatorToken(KEY));
+  assert.ok(await mayUseFrontDoor(good, KEY));
+  assert.ok(!(await mayUseFrontDoor(new Request(url), KEY)), "anonymous state read refused");
+  assert.ok(!(await mayUseFrontDoor(new Request(url, { headers: { authorization: "Bearer nope" } }), KEY)));
+  assert.ok(await mayUseFrontDoor(new Request(url), undefined), "no key configured: open");
+});
+

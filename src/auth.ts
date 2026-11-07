@@ -35,3 +35,20 @@ export async function claimsFor(token: string | undefined, key: string | undefin
   if (!token) return [];
   return sameSecret(token, await operatorToken(key)) ? ["read", "rpc"] : [];
 }
+
+/** The bearer token of a request, if any. */
+export function bearerToken(req: Request): string | undefined {
+  const h = req.headers.get("authorization") ?? "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1]!.trim() : undefined;
+}
+
+/**
+ * Whether a request to the managed loop's HTTP front door (state streams and
+ * RPC) may go through. The runtime streams state even to callers it grants no
+ * claims, so the agent checks the operator token itself before handing over.
+ */
+export async function mayUseFrontDoor(req: Request, key: string | undefined): Promise<boolean> {
+  return (await claimsFor(bearerToken(req), key)).includes("read");
+}
+

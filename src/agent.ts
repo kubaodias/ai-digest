@@ -8,7 +8,7 @@ import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
 import { DOWN_REASONS, UP_REASONS } from "./preferences.ts";
 import { digestFromReply } from "./digest.ts";
 import { SECRET, loadConfig, memoryProfile, secret } from "./config.ts";
-import { claimsFor } from "./auth.ts";
+import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
   FEEDBACK_CONVERSATION, KEEP_DIGESTS, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
@@ -237,8 +237,12 @@ export class AiDigest extends ManagedAgent {
     }
   }
 
-  /** GETs on the `feedback` conversation: icons, a stored digest's web view, and thumbs clicks. Everything else is the managed loop's HTTP front door. */
-  override fetch(req: Request): Promise<Response> {
+  /**
+   * GETs on the `feedback` conversation: icons, a stored digest's web view, and
+   * thumbs clicks (each signed on its own). Everything else is the managed
+   * loop's HTTP front door (state streams, RPC), which needs the operator token.
+   */
+  override async fetch(req: Request): Promise<Response> {
     if (req.method === "GET" && this.conversationName() === FEEDBACK_CONVERSATION) {
       const url = new URL(req.url);
       const asset = url.searchParams.get("asset");
@@ -248,6 +252,13 @@ export class AiDigest extends ManagedAgent {
       }
       if (url.searchParams.has("view")) return this.onView(url);
       if (url.searchParams.has("p")) return this.onFeedback(url);
+    }
+    if (!(await mayUseFrontDoor(req, await secret(this.agentEnv, SECRET.authKey)))) {
+      console.log(JSON.stringify({ auth: "refused", conversation: this.conversationName() ?? null, path: new URL(req.url).pathname }));
+      return new Response(JSON.stringify({ error: "unauthorized", message: "this agent needs the operator token (telnyx-acp sends it)" }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      });
     }
     return super.fetch(req);
   }
