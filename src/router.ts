@@ -80,15 +80,15 @@ export function runName(given: unknown, now = new Date()): string {
 
 /**
  * The request as the client sent it. TLS ends before the function, so requests
- * arrive as http://; every link built from the request (sign-in links, view
- * links, feedback links) must say https://, and Secure cookies need it.
- * X-Forwarded-Proto wins when present; localhost stays as it is (development).
+ * arrive as http:// (and the platform's X-Forwarded-Proto says http too, for
+ * that internal hop). Every link built from the request (sign-in links, view
+ * links, feedback links) must say https://, and Secure cookies need it, so
+ * anything but localhost (development) is treated as https://.
  */
 export function asPublic(req: Request): Request {
   const url = new URL(req.url);
-  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
   const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
-  const want = proto === "http" || proto === "https" ? proto : local ? url.protocol.slice(0, -1) : "https";
+  const want = local ? url.protocol.slice(0, -1) : "https";
   if (url.protocol === `${want}:`) return req;
   url.protocol = `${want}:`;
   return new Request(url.toString(), req);

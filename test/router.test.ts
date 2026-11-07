@@ -118,7 +118,7 @@ test("the digests page is routed before the operator-token check (it has its own
 
 test("requests arrive as http:// behind TLS: links are built from https://", async () => {
   assert.equal(new URL(asPublic(new Request("http://digest.example.com/v1/app")).url).protocol, "https:");
-  assert.equal(new URL(asPublic(new Request("http://digest.example.com/v1/app", { headers: { "x-forwarded-proto": "http" } })).url).protocol, "http:", "X-Forwarded-Proto wins");
+  assert.equal(new URL(asPublic(new Request("http://digest.example.com/v1/app", { headers: { "x-forwarded-proto": "http" } })).url).protocol, "https:", "the platform's X-Forwarded-Proto: http describes its internal hop, not the client");
   assert.equal(new URL(asPublic(new Request("http://localhost:8787/v1/app")).url).protocol, "http:", "local development unchanged");
   const { env, calls } = fakeEnv();
   await route(new Request("http://digest.example.com/v1/feedback?p=x&s=y"), env);
