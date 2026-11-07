@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-07
+
 ### Security
 
 - State streams (`GET …?subscribe=state`) now need the operator token too. In 0.1.1 the runtime still streamed conversation state, including the feedback vote log, to callers it granted no claims. The agent now checks the token itself before its HTTP front door, and answers 403 without it.
