@@ -1,6 +1,6 @@
 # Setting up AI Digest on your Telnyx account
 
-This guide takes you from nothing to a digest in your inbox. Everything runs on your own Telnyx account. Expect about 30 minutes, most of it waiting for DNS.
+This guide takes you from nothing to a digest in your inbox, on your own Telnyx account. Expect about 30 minutes, most of it waiting for DNS.
 
 Throughout, `example.com` stands for your own domain.
 
@@ -15,18 +15,22 @@ Throughout, `example.com` stands for your own domain.
 
 In the [Mission Control Portal](https://portal.telnyx.com), click your name (top right), then **API Keys**, then create a key. Copy it now; it's shown only once. See [Create and manage API keys](https://developers.telnyx.com/development/api-fundamentals/create-api-keys).
 
-## 2. Install the CLI and sign in
+## 2. Install the Edge Compute CLI
+
+Install `telnyx-edge` following the [Edge Compute docs](https://developers.telnyx.com/docs/edge-compute/platform-overview), then store your key:
 
 ```sh
-npm install -g @telnyx/acp
-telnyx-acp login
+telnyx-edge auth api-key set        # paste the key when asked
+telnyx-edge status                  # checks the key and connectivity
 ```
 
-`telnyx-acp` is the [Agent Control Plane](https://developers.telnyx.com/docs/agents) CLI. It builds the agent, deploys it to [Edge Compute](https://developers.telnyx.com/docs/edge-compute/platform-overview) and manages its secrets. Check it works with `telnyx-acp models`, which lists the inference models on your account. This agent uses `deepseek-ai/DeepSeek-V4.1-Flash` for writing and `Qwen/Qwen3.8-27B` for judging pictures; both are hosted by Telnyx and need no other provider key.
+The deploy script uses `telnyx-edge` to register and ship the function, and the key it stored for Telnyx API calls (secrets, Agent Memory settings). Alternatively, put the key in `.env` as `TELNYX_API_KEY` (step 4).
+
+The agent uses two models hosted by Telnyx, with no other provider key needed: `deepseek-ai/DeepSeek-V4.1-Flash` for researching and writing, and `Qwen/Qwen3.8-27B` for judging pictures.
 
 ## 3. Verify a sending domain
 
-The digest is sent from an address on your domain, such as `digest@example.com`, through [Telnyx Email](https://developers.telnyx.com/docs/messaging/email/domains).
+Digests are sent from an address on your domain, such as `digest@example.com`, through [Telnyx Email](https://developers.telnyx.com/docs/messaging/email/domains).
 
 1. In the portal, open **Messaging → Email → Domains** and add your domain (or `POST /v2/email_domains` with `{"domain": "example.com"}`).
 2. Telnyx shows the DNS records to publish. Add them at your DNS provider:
@@ -51,8 +55,6 @@ More in [Domains](https://developers.telnyx.com/docs/messaging/email/domains) an
 git clone https://github.com/kubaodias/ai-digest.git
 cd ai-digest
 npm install
-git config filter.strip-deployed.clean "node scripts/strip-deployed.mjs"
-git config filter.strip-deployed.smudge cat
 cp .env.example .env
 ```
 
@@ -61,16 +63,49 @@ Edit `.env`:
 | Setting | Required | What it is |
 |---|---|---|
 | `DIGEST_EMAIL_FROM` | yes | Sender on your verified domain, e.g. `digest@example.com` |
-| `DIGEST_EMAIL_TO` | yes | Recipient(s), comma-separated |
-| `TELNYX_API_KEY` | recommended | Your API key from step 1. Used to apply the Agent Memory settings |
-| `PUBLIC_URL` | no | Leave empty; the first deploy fills it in |
-| `DIGEST_MEMORY_PROFILE` | no | Agent Memory profile for your feedback (default `reader`) |
+| `DIGEST_EMAIL_TO` | yes | Default recipient(s), comma-separated. A digest can override it with `to:` |
+| `TELNYX_API_KEY` | no | Only if you didn't store it with `telnyx-edge auth api-key set` |
+| `AGENT_AUTH_KEY` | no | Leave empty; the first deploy creates it and writes it here |
 | `FEEDBACK_KEY` | no | Leave empty; a random link-signing key is generated and stored on Telnyx |
-| `AGENT_AUTH_KEY` | no | Leave empty; an operator key is generated, stored on Telnyx and saved for the CLI (see below) |
+| `FUNCTION_NAME` | no | The function's name on Edge Compute (default `ai-digest`) |
 
-`.env` is git-ignored. The deploy script stores these values as [Edge Compute secrets](https://developers.telnyx.com/docs/agents) on your account, where the agent reads them. `agent.json` only lists their names.
+`.env` is git-ignored. The deploy stores the agent's settings as [Edge Compute secrets](https://developers.telnyx.com/docs/edge-compute/platform-overview) on your account, where the function reads them.
 
-## 5. Deploy
+## 5. Define your digests
+
+Each digest is one Markdown file in `digests/` (git-ignored, so your digests stay private). Start from an example:
+
+```sh
+mkdir -p digests
+cp examples/digests/ai-swe.md digests/
+cp examples/digests/agent-memory.md digests/
+```
+
+The file name is the digest's id (lowercase letters, digits and dashes). It's also the name of the digest's Agent Memory profile and the prefix of its runs. A file has settings between `---` lines, then a plain-English description:
+
+```markdown
+---
+title: "Agent Memory Weekly — {range}"   # required: email subject and heading; {range} becomes the dates
+window: 14d                               # optional: days to look back (1d–90d, default 7d)
+items: 5-10                               # optional: how many items (default 5-15)
+closing: Takeaways                        # optional: closing section heading, or "none" (default "Themes this week")
+images: on                                # optional: pictures from the articles (default on)
+to: team@example.com                      # optional: recipients instead of DIGEST_EMAIL_TO
+schedule: "Thu 08:00 Europe/Warsaw"       # optional: kept for the scheduler in a later release
+---
+What to cover and who it's for, in a sentence or two (the first sentence is also
+used to judge which pictures help this reader).
+
+## Sources
+Where to start looking.
+
+## Leave out
+What isn't wanted.
+```
+
+Only `title` and the description are required. Unknown settings or invalid values stop the upload with the file and the reason.
+
+## 6. Deploy
 
 ```sh
 npm run deploy
@@ -78,62 +113,62 @@ npm run deploy
 
 This:
 1. runs the tests;
-2. stores your settings as secrets;
-3. deploys the agent (the first build takes a few minutes);
-4. on the first deploy, sets `PUBLIC_URL` to the address it got and deploys again, since the thumbs links in emails need it;
-5. creates the `ai-digest` [Agent Memory](https://developers.telnyx.com/docs/agent-memory) namespace and applies [the summary instructions](memory-summary-instructions.md), which keep the profile about your interests only.
+2. on the first run, registers the function on Edge Compute (`telnyx-edge new-func`);
+3. stores your settings as secrets, creating `AGENT_AUTH_KEY` (written to `.env`) and `FEEDBACK_KEY`;
+4. builds the function from `src/index.ts` and ships it (`telnyx-edge ship`); the first build takes a few minutes;
+5. records the function's public URL in `.edge/function.json` (git-ignored) and, the first time, ships again so the links in emails point to it;
+6. pushes your `digests/*.md`;
+7. creates the `ai-digest` [Agent Memory](https://developers.telnyx.com/docs/agent-memory) namespace and applies [the summary instructions](memory-summary-instructions.md).
 
-`npx telnyx-acp status` shows the deployment and its address.
+At the end it prints `…/v1/health`, which should return `{"ok": true, …}`.
 
-**Who can use the address.** Starting runs and reading the agent's state need an operator token. The deploy stores an auth key as the `AGENT_AUTH_KEY` secret and saves it in `~/.telnyx-acp/auth-keys.json`, where `telnyx-acp invoke`, `chat`, `eval` and `traces` find it and send the token for you. Anyone else gets refused. The feedback links in emails work for whoever has the email: each one carries its own signature.
-
-## 6. Get your first digest
-
-```sh
-npx telnyx-acp invoke ai-digest --conversation first-digest \
-  "Weekly digest: the most important AI and software engineering news from the past 7 days."
-```
-
-A digest takes 3–5 minutes. `invoke` stops waiting after about 30 seconds and may print *cannot reach … no answer in 30s*, but the run carries on, and the email arrives when it's done. Follow it with:
+## 7. Get your first digest
 
 ```sh
-npx telnyx-acp traces first-digest      # steps, tool calls, timing
-npx telnyx-acp logs --tail              # look for {"digestEmail":"sent"}
+npm run digests -- run ai-swe
+npm run digests -- run agent-memory "anything new on MCP memory servers"   # optional focus for this issue
 ```
 
-Any topic works the same way: `"Articles about agent frameworks from the last two weeks."`. Every reply that is a digest (numbered items) is emailed; other replies aren't.
+Each run takes 3–5 minutes and is emailed when it's done. Follow one with the conversation name `run` prints:
 
-## 7. Run it every week
-
-There's no built-in schedule, so trigger it from anywhere that can run the CLI. Use a new conversation name each time. For example, a GitHub Actions workflow in your fork (`.github/workflows/weekly-digest.yml`):
-
-```yaml
-name: Weekly digest
-on:
-  schedule:
-    - cron: "0 7 * * 1"   # Mondays 07:00 UTC
-  workflow_dispatch:
-jobs:
-  digest:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - run: npm install -g @telnyx/acp
-      - run: |
-          telnyx-acp invoke ai-digest --conversation "weekly-$(date +%G-W%V)" \
-            "Weekly digest: the most important AI and software engineering news from the past 7 days." || true
-        env:
-          TELNYX_API_KEY: ${{ secrets.TELNYX_API_KEY }}
-          TELNYX_ACP_AUTH_KEY: ${{ secrets.TELNYX_ACP_AUTH_KEY }}
+```sh
+npm run digests -- status agent-memory--2026-11-07t2155
+telnyx-edge actors logs AiDigest --type runtime    # look for {"digestEmail":"sent"}
 ```
 
-Add `TELNYX_API_KEY` and `TELNYX_ACP_AUTH_KEY` under the repository's **Settings → Secrets and variables → Actions**. The auth key is the value saved for your agent's address in `~/.telnyx-acp/auth-keys.json`; the CLI also reads it from the `TELNYX_ACP_AUTH_KEY` variable, which is how a CI runner or a teammate's machine authenticates. The `|| true` is because `invoke` returns before the run finishes; the email is sent regardless. Plain `cron` on any machine with the CLI works the same way.
+Other commands:
 
-## 8. Give feedback
+```sh
+npm run digests -- list               # what's stored on the function
+npm run digests -- push [id…]         # after editing files in digests/ (no redeploy needed)
+npm run digests -- pull [id…]         # download what's stored into digests/
+npm run digests -- show <id>
+npm run digests -- delete <id>        # its sent issues, votes and memory stay
+```
 
-Each item ends with grey **Useful? 👍 👎** links. A click records the vote and opens a page where you can say why: one or more of "I don't use *product*", "not interested in *topics*", "already knew this" (or, on 👍, "more about *company*", "*source* is a good source"). Click a selected reason again to deselect it. The next digest calls `reader_preferences`, gets your preferences, and ranks with them.
+Editing a digest only needs `push`, not a deploy. The function keeps the last 10 versions of each definition.
+
+## 8. Run digests on a schedule
+
+Built-in scheduling is planned. Until then, trigger runs from anywhere that has the repo and `.env`, e.g. cron on a machine you control:
+
+```cron
+0 7 * * 1  cd /path/to/ai-digest && npm run digests -- run ai-swe
+0 8 * * 4  cd /path/to/ai-digest && npm run digests -- run agent-memory
+```
+
+Or call the API directly, which only needs the function URL and the operator token:
+
+```sh
+curl -X POST "$URL/v1/digests/ai-swe/runs" \
+  -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" -d '{}'
+```
+
+where `$TOKEN` is the hex HMAC-SHA256 of the text `telnyx-acp operator` keyed with `AGENT_AUTH_KEY` (`node -e "console.log(require('crypto').createHmac('sha256', process.env.AGENT_AUTH_KEY).update('telnyx-acp operator').digest('hex'))"`). In GitHub Actions, store `AGENT_AUTH_KEY` and the URL as repository secrets.
+
+## 9. Give feedback
+
+Each item ends with grey **Useful? 👍 👎** links. A click records the vote and opens a page where you can say why: one or more of "I don't use *product*", "not interested in *topics*", "already knew this" (or, on 👍, "more about *company*", "*source* is a good source"). Click a selected reason again to deselect it. Votes count only toward the digest they came from; the next issue of that digest ranks with them.
 
 ## Updating
 
@@ -141,17 +176,20 @@ Each item ends with grey **Useful? 👍 👎** links. A click records the vote a
 git pull && npm install && npm run deploy
 ```
 
-Each deploy is a new immutable version (`npx telnyx-acp versions ai-digest`). Your votes, stored digests and memory carry over.
+Each ship is a new revision (`telnyx-edge revisions list ai-digest`). Votes, sent issues, digest definitions and memory carry over.
 
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |
 |---|---|
-| `invoke` is refused (no reply, or an authorization error) and the log shows `{"auth":"refused"}` | This machine doesn't have the agent's auth key. Copy it into `~/.telnyx-acp/auth-keys.json` under the agent's address, or set `TELNYX_ACP_AUTH_KEY`. If it's lost, set a new `AGENT_AUTH_KEY` in `.env` and run `npm run deploy`. |
-| `cannot reach … no answer in 30s` from `invoke` | Expected for long runs; the run continues. Check `traces` and `logs`. |
-| Log says `missing secrets: …` | Add them to `.env` and run `npm run deploy`, or `telnyx-acp add secret NAME`. |
-| Email arrives with no body | Something sent `text`/`html` instead of `text_body`/`html_body`; the Email API ignores unknown fields. This repo sends the right ones. |
+| `npm run digests` says `401 … operator token` | `AGENT_AUTH_KEY` in `.env` doesn't match the function's secret. Run `npm run deploy` to store it again. |
+| `push` says `✗ <id>: …` | The definition has a mistake; the message names the setting. |
+| `run` says `no digest "<id>"` | Push it first: `npm run digests -- push <id>`. |
+| No email after a run | `telnyx-edge actors logs AiDigest --type runtime`: look for `digestEmail` and `missing secrets`. Check the sender's domain is verified. (`telnyx-edge logs ai-digest` shows the function's own requests.) |
 | Email lands in spam or fails DMARC | Check the domain shows ownership, DKIM and SPF **verified**, and that there's only one SPF record. |
 | Every request returns 500 with `hydration failed … fence … 401` | A stale storage token on the platform side. Updating the function's binding forces a new one: `GET /v2/compute/bindings`, then `PUT /v2/compute/bindings/{id}` with the same `binding_type` and `env_name`. |
-| `reader_preferences` shows no memory summary | Agent Memory only builds the summary when asked; the agent asks (`refresh=true`) and waits up to a minute. It appears after your first votes. |
 | Feedback links say *invalid or expired* | The link-signing key changed, or the link is older than 90 days. Keep `FEEDBACK_KEY` stable. |
+
+## Upgrading from 0.1.x
+
+0.1.x was deployed with `telnyx-acp`. `npm run deploy` in 0.2.0 keeps the same function: it reads the old `agent.json` deploy data once, saves it to `.edge/function.json`, and moves the operator key into `.env`. After that you can delete `agent.json`. The old feedback links (`/agents/ai-digest/feedback`) keep working. Votes from before 0.2.0 count toward the `ai-swe` digest.

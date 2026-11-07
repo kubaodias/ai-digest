@@ -1,2 +1,0 @@
-# Strip the "deployed" block (function id, public URL) from agent.json on commit. See README → Development.
-agent.json filter=strip-deployed

@@ -35,9 +35,9 @@ let base = "";
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url!, base);
   const send = (body: string | Uint8Array, type: string) => { res.setHeader("content-type", type); res.end(body); };
-  if (url.searchParams.get("asset") === "thumb-up.png") return send(Buffer.from(THUMB_UP_PNG_BASE64, "base64"), "image/png");
-  if (url.searchParams.get("asset") === "thumb-down.png") return send(Buffer.from(THUMB_DOWN_PNG_BASE64, "base64"), "image/png");
-  const feedback = `${base}/agents/ai-digest/feedback`;
+  if (url.pathname === "/v1/assets/thumb-up.png") return send(Buffer.from(THUMB_UP_PNG_BASE64, "base64"), "image/png");
+  if (url.pathname === "/v1/assets/thumb-down.png") return send(Buffer.from(THUMB_DOWN_PNG_BASE64, "base64"), "image/png");
+  const feedback = `${base}/v1/feedback`;
   if (url.pathname === "/email") {
     const { markdown } = await addFeedbackLinks(telnyx, "screenshot-key", feedback, "20261107-demo", subject, md, md, []);
     return send(renderEmailHtml(markdown, subject), "text/html");

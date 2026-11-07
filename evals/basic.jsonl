@@ -1,4 +1,0 @@
-{"name":"greets","input":"Hello","expect":{"regex":"/\\b(hello|hi|hey|help|welcome|greetings)\\b/i"}}
-{"name":"weekly-digest","input":"Weekly digest: the hottest AI and software engineering news from the past 7 days, 5-15 items, most important first. End with \"Themes this week\".","expect":{"contains":"Themes this week","regex":"/^##\\s+1\\./m","tool":"web_search"}}
-{"name":"topic-request","input":"Articles about the Model Context Protocol from the past two weeks.","expect":{"regex":"/Model Context Protocol|MCP/","tool":"web_search","notContains":"AI & Software Engineering Digest"}}
-{"name":"no-email-talk","input":"Weekly digest: the most important AI news from the past 7 days.","expect":{"notContains":"Emailed to the reader"}}

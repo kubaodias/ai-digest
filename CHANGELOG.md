@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+Digests on any topic, each defined in its own file, on a function with its own entry point and a versioned API.
+
+### Added
+
+- **Digest definitions:** one Markdown file per digest (`digests/<id>.md`, git-ignored) with `title` (`{range}` for the dates), `window`, `items`, `closing`, `images`, `to` and a free-text description of what to cover, for whom, sources and exclusions. Examples in `examples/digests/` (`ai-swe`, `agent-memory`). Validated with precise errors (`src/profile.ts`).
+- Definitions are stored on the function (a `digests` actor, last 10 versions kept), so editing one needs `npm run digests -- push`, not a deploy.
+- **`npm run digests`:** `list`, `push`, `pull`, `show`, `delete`, `run <id> [focus]`, `status <conversation>`.
+- **v1 HTTP API:** `/v1/health`, `/v1/assets/*`, `/v1/feedback`, `/v1/digests[/<id>]` (GET, PUT, DELETE), `POST /v1/digests/<id>/runs`, `GET /v1/runs/<conversation>`. Operator routes need the operator token.
+- Each run happens in its own conversation, `<digest>--<run>`, and gets a request built from the digest's definition.
+- Per-digest email: a digest's `to:` overrides `DIGEST_EMAIL_TO`; `images: off` turns pictures off; pictures are judged for the reader the digest describes.
+
+### Changed
+
+- **Per-digest learning:** votes, preferences and Agent Memory are kept separately for each digest. The memory profile is named after the digest (`ai-swe`, `agent-memory`). Votes from before 0.2.0 count toward `ai-swe`; its memory profile starts fresh.
+- **Own entry point instead of the ACP-generated one:** the function is built from `src/index.ts` and shipped with `telnyx-edge` by `npm run deploy`, which registers the function on first use, stores secrets through the API, records the public URL in `.edge/function.json`, pushes `digests/` and applies the memory settings. `agent.json` and `telnyx-acp` are no longer used (the managed loop from `@telnyx/acp` still is).
+- The research instructions are topic-neutral; what used to be AI- and software-engineering-specific moved into `examples/digests/ai-swe.md`.
+- The operator key lives in `.env` (`AGENT_AUTH_KEY`); the first deploy moves the key `telnyx-acp` had saved there.
+- Feedback links use `/v1/feedback` and icons `/v1/assets/…`. Links in emails sent earlier keep working.
+
+### Removed
+
+- `DIGEST_MEMORY_PROFILE` (memory profiles are named after digests), the git filter for `agent.json`, and the `telnyx-acp eval` cases.
+
+### Security
+
+- Actors are no longer reachable over HTTP at all: the router calls them in-process, so state streams and RPC have no public route.
+
 ## [0.1.2] - 2026-11-07
 
 ### Security

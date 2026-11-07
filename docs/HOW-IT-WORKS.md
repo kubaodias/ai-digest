@@ -4,30 +4,50 @@
 
 | Piece | Runs on | Code |
 |---|---|---|
-| Research and writing | Telnyx Inference (`deepseek-ai/DeepSeek-V4.1-Flash`) with Telnyx Web Search (`web_search`, `fetch_page`) | `src/instructions.ts`, `agent.json` |
-| The agent | Telnyx Edge Compute: one durable actor per conversation | `src/agent.ts` |
+| The function and its API | Telnyx Edge Compute, shipped with `telnyx-edge` | `src/index.ts`, `src/router.ts` |
+| Digest definitions | The `digests` actor (durable state) | `src/profile.ts`, `src/agent.ts` |
+| Research and writing | Telnyx Inference (`deepseek-ai/DeepSeek-V4.1-Flash`) with Telnyx Web Search (`web_search`, `fetch_page`) | `src/instructions.ts`, `src/agent.ts` |
+| Runs | One actor per issue, named `<digest>--<run>` | `src/agent.ts` |
 | Picking pictures | Telnyx Inference (`Qwen/Qwen3.8-27B`, vision) | `src/images.ts` |
 | Delivery | Telnyx Email (`POST /v2/emails`) | `src/agent.ts` |
-| Feedback | The `feedback` conversation of the same agent | `src/feedback.ts`, `src/preferences.ts` |
-| Preference summary | Telnyx Agent Memory (namespace `ai-digest`) | `docs/memory-summary-instructions.md` |
+| Feedback | The `feedback` actor: votes and sent issues | `src/feedback.ts`, `src/preferences.ts` |
+| Preference summary | Telnyx Agent Memory (namespace `ai-digest`, one profile per digest) | `docs/memory-summary-instructions.md` |
 
-The agent is a [code-kind](https://developers.telnyx.com/docs/agents) ACP agent: a class extending the managed agent loop, so it gets the harness, tools and durable state, plus its own HTTP routes and hooks.
+The agent class extends the managed agent loop from `@telnyx/acp` (harness, tools, durable state). The function has its own entry point: the router is the only HTTP surface, and actors are only called in-process.
+
+## The API (v1)
+
+| Route | Who | What |
+|---|---|---|
+| `GET /v1/health` | anyone | `{"ok": true, "version": …}` |
+| `GET /v1/assets/thumb-up.png`, `thumb-down.png` | anyone | Icons for emails and pages |
+| `GET /v1/feedback?p=…&s=…` | signed links | A thumbs click or reason: records the vote, shows the feedback page |
+| `GET /v1/feedback?view=…&s=…` | signed links | A sent issue's web view |
+| `GET /v1/digests` | operator token | Stored digests (id, title, window, items, schedule, versions) |
+| `GET /v1/digests/<id>` | operator token | One definition (Markdown) |
+| `PUT /v1/digests/<id>` | operator token | Store a definition (body: Markdown); validated, the last 10 versions kept |
+| `DELETE /v1/digests/<id>` | operator token | Delete a definition (its issues, votes and memory stay) |
+| `POST /v1/digests/<id>/runs` | operator token | Start an issue: `{"message"?: "focus for this issue", "run"?: "name"}` → `202 {"conversation": …}` |
+| `GET /v1/runs/<conversation>` | operator token | The run's recent steps |
+| `GET /agents/ai-digest/feedback?…` | signed links | Same as `/v1/feedback`, for emails sent before 0.2.0 |
+
+The operator token is `Authorization: Bearer <hex HMAC-SHA256 of "telnyx-acp operator", keyed with AGENT_AUTH_KEY>` (`src/auth.ts`); `npm run digests` sends it. Errors are JSON: `{"error": …, "message": …}`.
 
 ## A digest, step by step
 
-1. **A request arrives**: `telnyx-acp invoke ai-digest --conversation <name> "<request>"`. Each conversation name is its own actor.
-2. **Preferences:** the model calls `reader_preferences` first. It returns the reader's entity, topic and source preferences from the vote log, plus the Agent Memory profile summary. It asks the memory service to rebuild a stale summary and waits up to a minute for it.
-3. **Research:** up to about 25 `web_search` and `fetch_page` calls, 3–5 in parallel, across community sites, AI labs, newsletters and engineering blogs. The instructions require items found in this run, links to the specific article (never a front page), and primary sources over reposts.
-4. **Writing:** 5–15 numbered items (`## N. Headline`, *Why it matters*, *Source*) and a closing *Themes* section.
-5. **Delivery is deterministic.** The model has no email tool. When a run completes, the agent's post-run hook (`rememberRun`) checks whether the reply is a digest, i.e. it has numbered `## N.` items. If so, it:
-   - picks pictures (below);
+1. **A run starts:** `npm run digests -- run agent-memory` → `POST /v1/digests/agent-memory/runs`. The router loads the definition, builds the request from it (`runMessage` in `src/profile.ts`: title, time window, item range, closing section, the description, and any focus for this issue) and hands it to a new actor, `agent-memory--<run>`.
+2. **Preferences:** the model calls `reader_preferences` first. It returns *this digest's* entity, topic and source preferences from the vote log, plus the summary of its Agent Memory profile (named after the digest). It asks the memory service to rebuild a stale summary and waits up to a minute for it.
+3. **Research:** up to about 25 `web_search` and `fetch_page` calls, 3–5 in parallel, starting from the sources the definition names. The instructions require items found in this run, inside the window, links to the specific article (never a front page), and primary sources over reposts.
+4. **Writing:** numbered items (`## N. Headline`, *Why it matters*, *Source*) within the item range, and the closing section the definition names (or none).
+5. **Delivery is deterministic.** The model has no email tool. When a run completes, the agent's post-run hook (`rememberRun`) checks whether the reply is a digest, i.e. it has numbered `## N.` items. If so, it reads the digest's definition again and:
+   - picks pictures (below), judged for the reader the definition describes (unless `images: off`);
    - adds a feedback row to each item and tags each item with topics and entities (one text-only Qwen call);
    - renders an email-safe HTML version (inline styles; images as captioned blocks);
-   - sends it through `POST /v2/emails` with `text_body` (the Markdown) and `html_body`;
-   - stores the digest (items, article URLs, tags, pictures, HTML) with the `feedback` actor, keeping the newest 12;
+   - sends it through `POST /v2/emails` with `text_body` (the Markdown) and `html_body`, to the definition's `to:` or else `DIGEST_EMAIL_TO`;
+   - stores the issue (digest id, items, article URLs, tags, pictures, HTML) with the `feedback` actor, keeping the newest 12;
    - records `emailedAt`, so a retried hook doesn't send twice.
 
-   The sender, recipients and public URL come from secrets (`src/config.ts`), never from the model.
+   The sender, default recipients and public URL come from secrets (`src/config.ts`), never from the model.
 
 ## Picking pictures
 
@@ -79,6 +99,10 @@ A thumb alone doesn't say *why*. The 👎 page offers:
 
 The 👍 page offers *More on topics*, *More about X* and *X is a good source*. Any number can be selected, and clicking a selected one deselects it. Clicking the same thumb again keeps them; flipping 👍/👎 clears them.
 
+### Per digest
+
+Votes, preferences and memory belong to one digest. A vote is tagged with its issue's digest, `reader_preferences` only counts that digest's votes, and each digest has its own Agent Memory profile. Liking retrieval papers in *agent-memory* doesn't change *ai-swe*. Votes from before 0.2.0 count toward `ai-swe`.
+
 ### From votes to preferences (`src/preferences.ts`)
 
 Each vote adds weight toward the item's main entity (or the entity you picked), its other entities, its topics and its source:
@@ -101,7 +125,7 @@ The model is told to apply entity preferences strictly, topic preferences softly
 
 ### Agent Memory
 
-Each vote also writes sentences to [Agent Memory](https://developers.telnyx.com/docs/agent-memory) (namespace `ai-digest`, profile from `DIGEST_MEMORY_PROFILE`, session `fb-<digest>-<item>`), one per reason, e.g. *"I don't use Postman — skip news mainly about Postman. This says nothing about the wider topic."* Changing a vote re-ingests the same session in place.
+Each vote also writes sentences to [Agent Memory](https://developers.telnyx.com/docs/agent-memory) (namespace `ai-digest`, profile named after the digest, e.g. `agent-memory`; session `fb-<issue>-<item>`), one per reason, e.g. *"I don't use Postman — skip news mainly about Postman. This says nothing about the wider topic."* Changing a vote re-ingests the same session in place.
 
 Undo deletes the memory source, and again two minutes later: ingestion is asynchronous, so a memory still being extracted could otherwise land after the first delete.
 
@@ -116,18 +140,20 @@ The vote log is the source of truth. The memory summary is a softer, readable vi
 
 | Data | Where | Kept |
 |---|---|---|
-| Your settings (sender, recipients, URL, signing key) | Telnyx secrets on your account | until you change them |
-| Votes (with reasons, entities, tags) | The `feedback` actor's durable state | until undone |
-| Sent digests (items + email HTML) | The `feedback` actor's durable state | newest 12 |
-| Preference sentences and the profile summary | Agent Memory, namespace `ai-digest` | until deleted |
-| Research conversations | Each conversation's actor | per the platform |
+| Your settings (sender, default recipients, URL, signing and operator keys) | Telnyx secrets on your account; locally in `.env` | until you change them |
+| Digest definitions | The `digests` actor's durable state (and your git-ignored `digests/`) | last 10 versions each |
+| Votes (with digest, reasons, entities, tags) | The `feedback` actor's durable state | until undone |
+| Sent issues (items + email HTML) | The `feedback` actor's durable state | newest 12 |
+| Preference sentences and profile summaries | Agent Memory, namespace `ai-digest`, one profile per digest | until deleted |
+| Research conversations | Each run's actor | per the platform |
+| The function's id and URL | `.edge/function.json` (git-ignored) | until you delete it |
 
-Nothing is kept outside your Telnyx account. The agent never writes conversations to memory; the only memory writes are the feedback sentences.
+Nothing is kept outside your Telnyx account and your machine. The agent never writes conversations to memory; the only memory writes are the feedback sentences.
 
 ## Security notes
 
-- **The public URL needs an operator token for RPC and state.** Starting runs, traces and state reads need a bearer token: HMAC-SHA256 of `telnyx-acp operator`, keyed with the agent's auth key (`src/auth.ts`). The CLI derives and sends it from `~/.telnyx-acp/auth-keys.json` or `TELNYX_ACP_AUTH_KEY`, and the agent derives the same token from its `AGENT_AUTH_KEY` secret, so the key never crosses the wire. Refusals are logged as `{"auth":"refused"}`. If the secret isn't set, the agent stays open rather than locking you out; `npm run deploy` always sets it.
-- Feedback links are signed and expire. Without the key, nobody can forge votes. They (and the digest view and icons) are served before the token check, so they work from the email.
-- The model can't choose who gets email: the recipients come from a secret.
-- The `feedback` actor's internal methods (`registerDigest`, `feedbackStats`) are reached in-process only. They aren't `@rpc`, so they're not exposed on the public URL.
-- The feedback pages are `noindex` and `no-store`.
+- **One HTTP surface.** The function's entry point routes every request; actors are only called in-process. Their own front doors (state streams, RPC) aren't reachable from outside, and the agent class refuses them without the operator token as a second line.
+- **The operator token** guards everything that changes or reveals data: managing digests, starting runs, run status. It's derived from `AGENT_AUTH_KEY`, which lives only in your `.env` and Telnyx secrets; the key itself never crosses the wire.
+- **Feedback links** are signed (HMAC-SHA256 with `FEEDBACK_KEY`) and expire after 90 days. Without the key, nobody can forge votes. The feedback pages are `noindex` and `no-store`.
+- **The model can't choose who gets email:** recipients come from the digest's definition (stored privately on your function) or a secret.
+- **Your digests stay private:** `digests/` is git-ignored, and definitions are stored on your own function.

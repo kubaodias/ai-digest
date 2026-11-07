@@ -22,9 +22,14 @@ import {
 export const FEEDBACK_CONVERSATION = "feedback";
 export const MEMORY_NAMESPACE = "ai-digest";
 
-/** The `feedback` conversation's URL under the agent's public URL: thumbs links, the digest web view and the icons live here. */
+/** The feedback URL under the function's public URL: thumbs links and the digest web view (API v1). */
 export function feedbackBase(publicUrl: string): string {
-  return `${publicUrl.replace(/\/+$/, "")}/agents/ai-digest/${FEEDBACK_CONVERSATION}`;
+  return `${publicUrl.replace(/\/+$/, "")}/v1/feedback`;
+}
+
+/** Where the icons are served, for a feedback URL (old /agents/… links included). */
+export function assetUrl(base: string, name: string): string {
+  return `${new URL(base).origin}/v1/assets/${name}`;
 }
 /** Links stop working after this long. */
 const LINK_TTL_S = 90 * 24 * 3600;
@@ -59,6 +64,8 @@ export interface DigestItemRecord {
 
 export interface DigestRecord {
   id: string;
+  /** Which digest (definition) this issue belongs to; preferences and memory are kept per digest. */
+  profile?: string;
   subject: string;
   sentAt: string;
   items: DigestItemRecord[];
@@ -75,6 +82,8 @@ export interface StoredVote {
   source: string;
   url?: string;
   vote: Vote;
+  /** Which digest the voted item came from (votes count only toward that digest). */
+  profile?: string;
   /** The reasons the reader selected on the thanks page (toggled one at a time). */
   reasons?: Selection[];
   /** Older single-reason votes; read through selectionsOf. */
@@ -196,7 +205,7 @@ export async function tagItems(telnyx: TelnyxClient, items: { headline: string; 
 /** The thumbs row closing each item: grey outline icons with a small label, left-aligned and spaced away from any image above. */
 function thumbsRow(base: string, up: string, down: string): string {
   const icon = (href: string, name: string, label: string) =>
-    `<a style="text-decoration:none;display:inline-block;padding:2px 4px;vertical-align:middle;" href="${href}" title="${label}" aria-label="${label}"><img src="${base}?asset=${name}" width="16" height="16" alt="${label}" style="display:block;width:16px;height:16px;border:0;"></a>`;
+    `<a style="text-decoration:none;display:inline-block;padding:2px 4px;vertical-align:middle;" href="${href}" title="${label}" aria-label="${label}"><img src="${assetUrl(base, name)}" width="16" height="16" alt="${label}" style="display:block;width:16px;height:16px;border:0;"></a>`;
   return `\n\n<div style="margin:14px 0 0;line-height:16px;font-size:12px;color:#9ca3af;"><span style="vertical-align:middle;padding-right:4px;">Useful?</span>${icon(up, "thumb-up.png", "More like this")}${icon(down, "thumb-down.png", "Less like this")}</div>\n\n`;
 }
 
@@ -298,7 +307,7 @@ export function preferencesFrom(votes: StoredVote[]): Preferences {
 // ── pages ────────────────────────────────────────────────────────────────────
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-const icon = (base: string, name: "thumb-up.png" | "thumb-down.png", size = 18) => `<img src="${base}?asset=${name}" width="${size}" height="${size}" alt="" style="vertical-align:-3px">`;
+const icon = (base: string, name: "thumb-up.png" | "thumb-down.png", size = 18) => `<img src="${assetUrl(base, name)}" width="${size}" height="${size}" alt="" style="vertical-align:-3px">`;
 
 export function page(title: string, body: string, status = 200): Response {
   return new Response(

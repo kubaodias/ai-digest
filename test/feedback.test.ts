@@ -6,7 +6,7 @@ import {
 } from "../src/feedback.ts";
 
 const KEY = "test-key";
-const BASE = "https://agent.example.com/agents/ai-digest/feedback";
+const BASE = "https://agent.example.com/v1/feedback";
 const future = Math.floor(Date.now() / 1000) + 3600;
 const params = (link: string) => new URL(link.replace(/&amp;/g, "&")).searchParams;
 
@@ -258,11 +258,11 @@ test("a 👎 'source' reason link is no longer accepted", async () => {
 });
 
 test("links and icons use the configured public URL, nothing hard-coded", async () => {
-  const link = await feedbackLink(KEY, "https://other.example.org/agents/ai-digest/feedback", { d: "d", i: 1, v: "up", e: future });
-  assert.ok(link.startsWith("https://other.example.org/agents/ai-digest/feedback?p="));
+  const link = await feedbackLink(KEY, "https://other.example.org/v1/feedback", { d: "d", i: 1, v: "up", e: future });
+  assert.ok(link.startsWith("https://other.example.org/v1/feedback?p="));
   const vote = nextVote(undefined, pay(), item, T).vote;
-  const html = await thanksPage({ base: "https://other.example.org/agents/ai-digest/feedback", vote, item, prefs: preferencesFrom([vote]), links: { undo: "#u", flip: "#f", reasons: {} } }).text();
-  assert.match(html, /src="https:\/\/other\.example\.org\/agents\/ai-digest\/feedback\?asset=thumb-down\.png"/);
+  const html = await thanksPage({ base: "https://other.example.org/v1/feedback", vote, item, prefs: preferencesFrom([vote]), links: { undo: "#u", flip: "#f", reasons: {} } }).text();
+  assert.match(html, /src="https:\/\/other\.example\.org\/v1\/assets\/thumb-down\.png"/);
   assert.doesNotMatch(html, /telnyxcompute\.com/);
 });
 

@@ -7,17 +7,25 @@ import { addImages } from "./images.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
 import { DOWN_REASONS, UP_REASONS } from "./preferences.ts";
 import { digestFromReply } from "./digest.ts";
-import { SECRET, loadConfig, memoryProfile, secret } from "./config.ts";
+import { SECRET, loadConfig, secret } from "./config.ts";
+import { LEGACY_PROFILE, audienceOf, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
 import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
   FEEDBACK_CONVERSATION, KEEP_DIGESTS, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
 } from "./feedback.ts";
 
-// ai-digest: a research agent on Telnyx Edge Compute that writes an AI and
-// software engineering digest, emails it, and learns from thumbs feedback.
-// Each conversation is one durable instance of this class. Account-specific
-// settings (sender, recipients, public URL) are Telnyx secrets: see config.ts.
+// ai-digest: a research agent on Telnyx Edge Compute that writes email digests
+// on any topic, defined per digest (profile.ts), emails them, and learns from
+// thumbs feedback, separately for each digest. Each conversation is one durable
+// instance of this class: "<digest>--<run>" for runs, plus two service actors,
+// "feedback" (votes, sent issues) and "digests" (the definitions).
+// Account-specific settings are Telnyx secrets: see config.ts.
+
+/** The service actor that stores the digest definitions. */
+const DIGESTS_CONVERSATION = "digests";
+/** Versions kept per digest definition. */
+const KEEP_VERSIONS = 10;
 
 const spec: ManagedAgentSpec = {
   name: "ai-digest",
@@ -71,16 +79,28 @@ async function feedbackKey(env: ManagedEnv): Promise<string | undefined> {
   return secrets ? ((await secrets.get(SECRET.feedbackKey).catch(() => "")) || undefined) : undefined;
 }
 
-/** The `feedback` conversation's actor, reached in-process (not over the public mount). */
+/** The service actors, reached in-process. */
 const feedbackActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
+const digestsActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(DIGESTS_CONVERSATION);
+
+/** A digest's definition, parsed; undefined when it isn't stored (or is invalid). */
+async function loadProfile(env: ManagedEnv, id: string): Promise<DigestProfile | undefined> {
+  const stored = await digestsActor(env).getDigest(id).catch(() => undefined);
+  if (!stored) return undefined;
+  try {
+    return parseProfile(id, stored.markdown);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * The Agent Memory profile summary, current. The service builds it only when
  * asked (`refresh=true`; a plain read of a stale summary returns null and
  * builds nothing), and building takes up to ~40 s, so ask and wait for it.
  */
-async function readMemorySummary(env: ManagedEnv, waitMs = 60_000): Promise<string | null> {
-  const url = `/ai/memory/namespaces/${MEMORY_NAMESPACE}/profiles/${encodeURIComponent(await memoryProfile(env))}/summary`;
+async function readMemorySummary(env: ManagedEnv, profile: string, waitMs = 60_000): Promise<string | null> {
+  const url = `/ai/memory/namespaces/${MEMORY_NAMESPACE}/profiles/${encodeURIComponent(profile)}/summary`;
   const telnyx = env.TELNYX as any;
   const first: any = await telnyx.get(url, { query: { refresh: "true" } });
   if (first?.data?.text && !first.data.is_stale) return first.data.text;
@@ -103,17 +123,18 @@ function emailTools(env: ManagedEnv, holder: ActorHolder) {
   return {
     reader_preferences: tool({
       description:
-        "The reader's preferences learned from their thumbs feedback on past digest items: entity preferences (specific products/companies: apply strictly), topic preferences with enough evidence (apply softly), tentative topics (ignore), source preferences, recent votes with reasons, and a memory summary. Call once before researching a digest.",
+        "This digest's reader preferences, learned from their thumbs feedback on past issues of this digest: entity preferences (specific products/companies: apply strictly), topic preferences with enough evidence (apply softly), tentative topics (ignore), source preferences, recent votes with reasons, and a memory summary. Call once before researching.",
       inputSchema: z.object({}),
       execute: async () => {
-        const out: Record<string, unknown> = {};
+        const profile = profileIdOf(holder.actor?.conversationName()) ?? LEGACY_PROFILE;
+        const out: Record<string, unknown> = { digest: profile };
         try {
-          out.feedback = await feedbackActor(env).feedbackStats();
+          out.feedback = await feedbackActor(env).feedbackStats(profile);
         } catch (err) {
           out.feedbackError = err instanceof Error ? err.message : String(err);
         }
-        out.memorySummary = await readMemorySummary(env).catch(() => null);
-        console.log(JSON.stringify({ toolCall: "reader_preferences", votes: (out.feedback as any)?.votes ?? 0, memory: out.memorySummary ? "yes" : "none" }));
+        out.memorySummary = await readMemorySummary(env, profile).catch(() => null);
+        console.log(JSON.stringify({ toolCall: "reader_preferences", digest: profile, votes: (out.feedback as any)?.votes ?? 0, memory: out.memorySummary ? "yes" : "none" }));
         return out;
       },
     }),
@@ -121,14 +142,18 @@ function emailTools(env: ManagedEnv, holder: ActorHolder) {
 }
 
 /** Emailing a finished digest: pictures, thumbs links, render, send, and register the digest with the feedback actor. */
-async function sendDigestEmail(env: ManagedEnv, { subject, markdown, images }: { subject: string; markdown: string; images: boolean }) {
-
+async function sendDigestEmail(
+  env: ManagedEnv,
+  { subject, markdown, profileId, profile }: { subject: string; markdown: string; profileId: string; profile?: DigestProfile },
+) {
   const started = Date.now();
   const telnyx = env.TELNYX as any;
   if (!telnyx) return { ok: false, error: "no TELNYX binding" };
   const { config, missing } = await loadConfig(env);
   if (!config) return { ok: false, error: `missing secrets: ${missing.join(", ")} (telnyx-acp add secret NAME)` };
   const base = feedbackBase(config.publicUrl);
+  const images = profile?.images ?? true;
+  const to = profile?.to.length ? profile.to : config.emailTo;
   const log = (e: Record<string, unknown>) => console.log(JSON.stringify(e));
   // Pictures go into the HTML part only; a failure here never blocks the email.
   let htmlMarkdown = markdown;
@@ -136,7 +161,7 @@ async function sendDigestEmail(env: ManagedEnv, { subject, markdown, images }: {
   let pickedImages: { url: string; caption: string }[][] = [];
   if (images) {
     try {
-      const r = await addImages(telnyx, markdown, log);
+      const r = await addImages(telnyx, markdown, log, audienceOf(profile));
       htmlMarkdown = r.markdown;
       picked = r.report.map((i) => ({ headline: i.headline, images: i.images.length, ...(i.note ? { note: i.note } : {}) }));
       pickedImages = r.report.map((i) => i.images.map((im) => ({ url: im.url, caption: im.caption })));
@@ -154,7 +179,7 @@ async function sendDigestEmail(env: ManagedEnv, { subject, markdown, images }: {
     if (key) {
       const r = await addFeedbackLinks(telnyx, key, base, digestId, subject, markdown, htmlMarkdown, pickedImages);
       htmlMarkdown = r.markdown;
-      record = r.record;
+      record = { ...r.record, profile: profileId };
       feedbackItems = r.record.items.length;
       log({ feedback: "links added", digest: digestId, items: feedbackItems, tags: r.record.items.map((i) => i.tags) });
     } else log({ feedback: "no FEEDBACK_KEY; links skipped" });
@@ -165,7 +190,7 @@ async function sendDigestEmail(env: ManagedEnv, { subject, markdown, images }: {
     // The API wants `to` as an array and the bodies as text_body / html_body (unknown fields are silently dropped).
     const html = renderEmailHtml(htmlMarkdown, subject);
     const res: any = await telnyx.post("/emails", {
-      body: { from: config.emailFrom, to: config.emailTo, subject, text_body: markdown, html_body: html },
+      body: { from: config.emailFrom, to, subject, text_body: markdown, html_body: html },
     });
     const data = res?.data ?? res;
     // The feedback actor keeps the digest so a click can show the article and the digest it came from.
@@ -174,7 +199,7 @@ async function sendDigestEmail(env: ManagedEnv, { subject, markdown, images }: {
         .registerDigest({ ...record, html })
         .catch((err: unknown) => log({ feedback: "register failed", error: err instanceof Error ? err.message : String(err) }));
     }
-    log({ emailApi: "queued", ok: true, id: data?.id, status: data?.status, ms: Date.now() - started });
+    log({ emailApi: "queued", ok: true, digest: profileId, id: data?.id, status: data?.status, ms: Date.now() - started });
     return { ok: true, id: data?.id, status: data?.status, imagesAdded: picked.reduce((n, p) => n + p.images, 0), feedbackItems, digestId };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
@@ -194,9 +219,9 @@ export class AiDigest extends ManagedAgent {
   }
 
   /**
-   * RPC (starting runs, traces) and state reads over the public URL need the
-   * operator token the telnyx-acp CLI sends (see auth.ts). In-process calls
-   * between this agent's actors and the feedback routes don't come through here.
+   * Defence in depth: the v1 router never hands requests to an actor's own
+   * front door (state streams, RPC) except the signed feedback pages, but if
+   * one arrives it needs the operator token (see auth.ts).
    */
   override async authorize(token?: string, _req?: Request): Promise<any> {
     const claims = await claimsFor(token, await secret(this.agentEnv, SECRET.authKey));
@@ -218,7 +243,8 @@ export class AiDigest extends ManagedAgent {
    */
   async rememberRun(runId: string, before: number) {
     await (ManagedAgent.prototype as any).rememberRun.call(this, runId, before);
-    if (this.conversationName() === FEEDBACK_CONVERSATION) return;
+    const conversation = this.conversationName();
+    if (conversation === FEEDBACK_CONVERSATION || conversation === DIGESTS_CONVERSATION) return;
     try {
       const started = Number(runId.match(/-(\d{13})-/)?.[1] ?? 0);
       const state: any = await (this as any).getState();
@@ -228,8 +254,10 @@ export class AiDigest extends ManagedAgent {
       const digest = digestFromReply(reply);
       if (!digest) return; // not a digest (an answer, an error, a question): nothing to email
       const { subject, markdown } = digest;
-      console.log(JSON.stringify({ digestEmail: "sending", runId }));
-      const result = await sendDigestEmail(this.agentEnv, { subject, markdown, images: true });
+      const profileId = profileIdOf(conversation) ?? LEGACY_PROFILE;
+      const profile = await loadProfile(this.agentEnv, profileId);
+      console.log(JSON.stringify({ digestEmail: "sending", runId, digest: profileId, definition: profile ? "stored" : "defaults" }));
+      const result = await sendDigestEmail(this.agentEnv, { subject, markdown, profileId, profile });
       if (result.ok) await this.markEmailed();
       console.log(JSON.stringify({ digestEmail: result.ok ? "sent" : "failed", runId, ...(result.ok ? { id: (result as any).id } : { error: (result as any).error }) }));
     } catch (err) {
@@ -238,9 +266,10 @@ export class AiDigest extends ManagedAgent {
   }
 
   /**
-   * GETs on the `feedback` conversation: icons, a stored digest's web view, and
-   * thumbs clicks (each signed on its own). Everything else is the managed
-   * loop's HTTP front door (state streams, RPC), which needs the operator token.
+   * GETs on the `feedback` conversation (forwarded by the router): thumbs
+   * clicks and a stored issue's web view, each signed on its own, and the old
+   * `?asset=` icon URLs from emails sent before 0.2.0. Anything else is the
+   * managed loop's front door, which needs the operator token.
    */
   override async fetch(req: Request): Promise<Response> {
     if (req.method === "GET" && this.conversationName() === FEEDBACK_CONVERSATION) {
@@ -287,7 +316,8 @@ export class AiDigest extends ManagedAgent {
     if (!item && !prior) return errorPage(404, "That digest is no longer stored, so the vote can't be matched to an article.");
     // This page's own URL is the feedback base: no configuration needed to build its links.
     const base = `${url.origin}${url.pathname}`;
-    const profile = await memoryProfile(this.agentEnv);
+    // Votes, preferences and memory are per digest: the issue's digest, else the vote's, else the default.
+    const profile = digest?.profile ?? prior?.profile ?? LEGACY_PROFILE;
     const view = digest?.html ? await viewLink(key, base, p.d) : undefined;
     try {
       if (url.searchParams.get("undo") === "1") {
@@ -301,6 +331,7 @@ export class AiDigest extends ManagedAgent {
         return undonePage(item?.headline ?? prior?.headline ?? "", view);
       }
       const { vote, changed } = nextVote(prior, p, item, new Date().toISOString());
+      vote.profile ??= profile;
       // "I don't use X" needs to know X: fill in entities for votes on items tagged before entities existed; the main one is meant.
       const untargeted = vote.reasons?.find((x) => x.r === "entity" && !x.target);
       if (untargeted && !vote.entities?.length) {
@@ -315,7 +346,7 @@ export class AiDigest extends ManagedAgent {
         await (this as any).setState({ votes: { [id]: vote } });
       }
       console.log(JSON.stringify({ feedback: "vote", id, vote: vote.vote, reasons: vote.reasons ?? [], entities: vote.entities, tags: vote.tags, changed }));
-      const votes = Object.values({ ...(state?.votes ?? {}), [id]: vote }).filter(Boolean) as StoredVote[];
+      const votes = (Object.values({ ...(state?.votes ?? {}), [id]: vote }).filter(Boolean) as StoredVote[]).filter((v) => (v.profile ?? LEGACY_PROFILE) === profile);
       const pay = { d: p.d, i: p.i, v: p.v, e: p.e };
       const flip = await feedbackLink(key, base, { ...pay, v: p.v === "up" ? "down" : "up" });
       const undo = await feedbackLink(key, base, pay, "&undo=1");
@@ -344,7 +375,7 @@ export class AiDigest extends ManagedAgent {
 
   /** Scheduled after an undo: delete the vote's memory source again, catching memories extracted after the first delete. */
   async forgetMemorySourceLater(p: { source: string; profile?: string }) {
-    await forgetVote(this.agentEnv.TELNYX as any, p.profile ?? (await memoryProfile(this.agentEnv)), p.source).catch(() => undefined);
+    await forgetVote(this.agentEnv.TELNYX as any, p.profile ?? LEGACY_PROFILE, p.source).catch(() => undefined);
     console.log(JSON.stringify({ feedback: "memory deleted again", source: p.source }));
   }
 
@@ -357,9 +388,54 @@ export class AiDigest extends ManagedAgent {
     return { stored: record.id, dropped: drop.length };
   }
 
-  /** The reader's preferences from the vote log, for `reader_preferences`. Called in-process from other conversations; not @rpc, so not on the public mount. */
-  async feedbackStats() {
+  /** One digest's preferences from the vote log, for `reader_preferences`. Called in-process; not @rpc. */
+  async feedbackStats(profile: string = LEGACY_PROFILE) {
     const state: any = await (this as any).getState();
-    return preferencesFrom(Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]);
+    const votes = (Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]).filter((v) => (v.profile ?? LEGACY_PROFILE) === profile);
+    return preferencesFrom(votes);
+  }
+
+  // ── the `digests` actor: digest definitions (called in-process by the router) ──
+
+  /** Every stored digest: id, title, window, items, schedule, when it changed. */
+  async listDigests() {
+    const state: any = await (this as any).getState();
+    return Object.values(state?.profiles ?? {})
+      .filter(Boolean)
+      .map((d: any) => {
+        let p: DigestProfile | undefined;
+        try {
+          p = parseProfile(d.id, d.markdown);
+        } catch {}
+        return { id: d.id, title: p?.title ?? null, windowDays: p?.windowDays ?? null, items: p?.items ?? null, schedule: p?.schedule ?? null, updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 };
+      })
+      .sort((a: any, b: any) => a.id.localeCompare(b.id));
+  }
+
+  /** One digest's definition (Markdown), or null. */
+  async getDigest(id: string) {
+    const state: any = await (this as any).getState();
+    const d = state?.profiles?.[id];
+    return d ? { id, markdown: d.markdown, updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 } : null;
+  }
+
+  /** Store a digest's definition (validated by the router), keeping the previous versions. */
+  async putDigest(id: string, markdown: string) {
+    const state: any = await (this as any).getState();
+    const prev = state?.profiles?.[id];
+    if (prev && prev.markdown === markdown) return { id, changed: false, versions: (prev.history?.length ?? 0) + 1 };
+    const history = prev ? [{ markdown: prev.markdown, updatedAt: prev.updatedAt }, ...(prev.history ?? [])].slice(0, KEEP_VERSIONS - 1) : [];
+    await (this as any).setState({ profiles: { [id]: { id, markdown, updatedAt: new Date().toISOString(), history } } });
+    console.log(JSON.stringify({ digests: prev ? "updated" : "created", id }));
+    return { id, changed: true, versions: history.length + 1 };
+  }
+
+  /** Delete a digest's definition (its sent issues, votes and memory stay). */
+  async deleteDigest(id: string) {
+    const state: any = await (this as any).getState();
+    if (!state?.profiles?.[id]) return { id, deleted: false };
+    await (this as any).setState({ profiles: { [id]: null } });
+    console.log(JSON.stringify({ digests: "deleted", id }));
+    return { id, deleted: true };
   }
 }

@@ -37,10 +37,13 @@ const today = new Date().toISOString().slice(0, 10);
 writeFileSync(clPath, cl.replace(m[0], `## [Unreleased]\n\n## [${next}] - ${today}\n\n${m[1].trim()}\n`));
 pkg.version = next;
 writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+// The version the API reports at /v1/health.
+const routerPath = `${root}src/router.ts`;
+writeFileSync(routerPath, readFileSync(routerPath, "utf8").replace(/export const VERSION = "[^"]*";/, `export const VERSION = "${next}";`));
 run("npm", ["install", "--package-lock-only", "--silent"]);
 
 say(`Committing and tagging v${next}`);
-run("git", ["add", "package.json", "package-lock.json", "CHANGELOG.md"]);
+run("git", ["add", "package.json", "package-lock.json", "CHANGELOG.md", "src/router.ts"]);
 run("git", ["commit", "-m", `Release v${next}`]);
 run("git", ["tag", "-a", `v${next}`, "-m", `v${next}`]);
 

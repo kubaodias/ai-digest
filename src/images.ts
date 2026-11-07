@@ -6,6 +6,8 @@
 
 /** The vision model: hosted by Telnyx, accepts base64 images (checked: Qwen3.8-27B answers in ~2 s). */
 export const VISION_MODEL = "Qwen/Qwen3.8-27B";
+/** Who the pictures should help, when the digest doesn't say. */
+export const DEFAULT_AUDIENCE = "a software engineer following AI and software engineering news";
 /** A candidate needs at least this score (0–10) from the vision model to be used. */
 export const MIN_SCORE = 7;
 export const MAX_IMAGES_PER_ITEM = 2;
@@ -253,21 +255,21 @@ function sniff(bytes: Uint8Array, header: string): string | undefined {
   return VISION_FORMATS.test(header) ? header : undefined;
 }
 
-const VISION_PROMPT = (headline: string, context: string, c: Candidate) => `You are choosing illustrations for an engineering news digest.
+const VISION_PROMPT = (headline: string, context: string, c: Candidate, audience: string) => `You are choosing illustrations for an email digest. Its reader: ${audience}.
 
 News item: ${headline}
 Summary: ${context || "(none)"}
 Image alt text: ${c.alt || "(none)"}
 Image caption on the page: ${c.caption || "(none)"}
 
-Look at the image. Score 0–10 how much it helps a software engineer understand THIS news item:
+Look at the image. Score 0–10 how much it helps this reader understand THIS item:
 - 8–10: shows the actual subject: a benchmark chart or table, an architecture diagram, a product/UI/terminal screenshot, a code snippet, a photo of the specific device or event.
 - 4–7: related but generic (a lab's branded banner with the model name, a conference stage photo).
 - 0–3: decorative or irrelevant: stock photo, abstract art, logo only, author headshot, ad, cookie banner, mostly text of a headline.
 
 Answer with JSON only, no prose: {"score": <0-10>, "kind": "<chart|diagram|screenshot|photo|banner|logo|stock|other>", "caption": "<one factual sentence describing what the image shows, max 20 words>"}`;
 
-async function judge(telnyx: TelnyxPoster, dataUrl: string, headline: string, context: string, c: Candidate): Promise<{ score: number; kind: string; caption: string }> {
+async function judge(telnyx: TelnyxPoster, dataUrl: string, headline: string, context: string, c: Candidate, audience: string): Promise<{ score: number; kind: string; caption: string }> {
   const call = telnyx.post("/ai/chat/completions", {
     body: {
       model: VISION_MODEL,
@@ -275,7 +277,7 @@ async function judge(telnyx: TelnyxPoster, dataUrl: string, headline: string, co
       temperature: 0,
       // Qwen3.8 reasons by default and spends the budget before answering; "none" answers in ~1 s.
       reasoning_effort: "none",
-      messages: [{ role: "user", content: [{ type: "text", text: VISION_PROMPT(headline, context, c) }, { type: "image_url", image_url: { url: dataUrl } }] }],
+      messages: [{ role: "user", content: [{ type: "text", text: VISION_PROMPT(headline, context, c, audience) }, { type: "image_url", image_url: { url: dataUrl } }] }],
     },
   });
   const res: any = await Promise.race([call, new Promise((_, rej) => setTimeout(() => rej(new Error("vision timeout")), VISION_TIMEOUT_MS))]);
@@ -287,7 +289,7 @@ async function judge(telnyx: TelnyxPoster, dataUrl: string, headline: string, co
 }
 
 /** Up to MAX_IMAGES_PER_ITEM images from one article that the vision model judged relevant. */
-export async function pickImages(telnyx: TelnyxPoster, article: string, headline: string, context: string, log: Log = () => {}): Promise<PickedImage[]> {
+export async function pickImages(telnyx: TelnyxPoster, article: string, headline: string, context: string, log: Log = () => {}, audience = DEFAULT_AUDIENCE): Promise<PickedImage[]> {
   const page = await fetchLimited(article, PAGE_TIMEOUT_MS, MAX_PAGE_BYTES, "text/html,application/xhtml+xml");
   if (!page.type.includes("html")) throw new Error(`not an HTML page (${page.type || "no type"})`);
   const html = new TextDecoder().decode(page.bytes);
@@ -304,7 +306,7 @@ export async function pickImages(telnyx: TelnyxPoster, article: string, headline
         const dim = dimensions(img.bytes);
         if (dim && dim.w < 500) throw new Error(`too narrow (${dim.w}x${dim.h})`);
         if (dim && dim.h > dim.w) throw new Error(`taller than wide (${dim.w}x${dim.h})`);
-        const v = await judge(telnyx, `data:${type};base64,${base64(img.bytes)}`, headline, context, c);
+        const v = await judge(telnyx, `data:${type};base64,${base64(img.bytes)}`, headline, context, c, audience);
         log({ images: "judged", url: c.url, origin: c.origin, score: v.score, kind: v.kind });
         return { url: c.url, caption: c.caption && c.caption.length <= 200 ? c.caption : v.caption, score: v.score, kind: v.kind };
       } catch (err) {
@@ -369,13 +371,13 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
  * each followed by an italic caption line), plus a per-item report. Items
  * whose articles fail or have nothing relevant are left as they were.
  */
-export async function addImages(telnyx: TelnyxPoster, markdown: string, log: Log = () => {}): Promise<{ markdown: string; report: ItemImages[] }> {
+export async function addImages(telnyx: TelnyxPoster, markdown: string, log: Log = () => {}, audience = DEFAULT_AUDIENCE): Promise<{ markdown: string; report: ItemImages[] }> {
   const sections = digestSections(markdown);
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   // One look per article page, even when several items or links point at it.
   const seen = new Map<string, Promise<PickedImage[]>>();
   const pick = (article: string, s: Section) => {
-    if (!seen.has(article)) seen.set(article, pickImages(telnyx, article, s.headline, s.context, log));
+    if (!seen.has(article)) seen.set(article, pickImages(telnyx, article, s.headline, s.context, log, audience));
     return seen.get(article)!;
   };
   const report = await pool(sections, CONCURRENCY, async (s): Promise<ItemImages> => {
