@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-07
+
 ### Added
 
 - **The digests page**, `/v1/app` on your function (read-only). The overview shows every digest with its settings, last issue, vote count and memory size. A digest's page shows its settings, description and raw definition file, its recent issues (each opens the sent email via a signed view link), what it learned from your votes (products and companies, topics, tentative topics, sources) and its Agent Memory summary.

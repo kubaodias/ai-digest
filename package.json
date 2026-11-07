@@ -1,6 +1,6 @@
 {
   "name": "ai-digest",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "description": "An AI agent on Telnyx Edge Compute that researches any topic you define, emails a digest with relevant pictures, and learns from thumbs feedback, per digest.",
   "license": "GPL-3.0-or-later",

@@ -23,7 +23,7 @@ import { ID_PATTERN, ProfileError, parseProfile, runConversation, runMessage } f
 import { app } from "./app.ts";
 import { parseRecipients } from "./config.ts";
 
-export const VERSION = "0.2.1";
+export const VERSION = "0.3.0";
 export const FEEDBACK_ACTOR = "feedback";
 export const DIGESTS_ACTOR = "digests";
 
