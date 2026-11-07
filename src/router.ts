@@ -78,7 +78,24 @@ export function runName(given: unknown, now = new Date()): string {
   return now.toISOString().slice(0, 16).replace(/[:]/g, "").toLowerCase();
 }
 
-export async function route(req: Request, env: RouterEnv): Promise<Response> {
+/**
+ * The request as the client sent it. TLS ends before the function, so requests
+ * arrive as http://; every link built from the request (sign-in links, view
+ * links, feedback links) must say https://, and Secure cookies need it.
+ * X-Forwarded-Proto wins when present; localhost stays as it is (development).
+ */
+export function asPublic(req: Request): Request {
+  const url = new URL(req.url);
+  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
+  const want = proto === "http" || proto === "https" ? proto : local ? url.protocol.slice(0, -1) : "https";
+  if (url.protocol === `${want}:`) return req;
+  url.protocol = `${want}:`;
+  return new Request(url.toString(), req);
+}
+
+export async function route(incoming: Request, env: RouterEnv): Promise<Response> {
+  const req = asPublic(incoming);
   const url = new URL(req.url);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method.toUpperCase();

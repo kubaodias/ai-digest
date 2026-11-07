@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { operatorToken } from "../src/auth.ts";
-import { route, runName, type RouterEnv } from "../src/router.ts";
+import { asPublic, route, runName, type RouterEnv } from "../src/router.ts";
 
 const KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ORIGIN = "https://digest.example.com";
@@ -114,5 +114,31 @@ test("the digests page is routed before the operator-token check (it has its own
   assert.equal(r.status, 303);
   assert.equal(r.headers.get("location"), "/v1/app/sign-in");
   assert.equal((await route(req("/v1/app/sign-in"), env)).status, 200);
+});
+
+test("requests arrive as http:// behind TLS: links are built from https://", async () => {
+  assert.equal(new URL(asPublic(new Request("http://digest.example.com/v1/app")).url).protocol, "https:");
+  assert.equal(new URL(asPublic(new Request("http://digest.example.com/v1/app", { headers: { "x-forwarded-proto": "http" } })).url).protocol, "http:", "X-Forwarded-Proto wins");
+  assert.equal(new URL(asPublic(new Request("http://localhost:8787/v1/app")).url).protocol, "http:", "local development unchanged");
+  const { env, calls } = fakeEnv();
+  await route(new Request("http://digest.example.com/v1/feedback?p=x&s=y"), env);
+  assert.equal(calls[0]!.actor, "feedback");
+  const seen: string[] = [];
+  const env2 = { ...env, AI_DIGEST: { idFromName: () => ({ fetch: async (r: Request) => (seen.push(r.url), new Response("ok")) }) } };
+  await route(new Request("http://digest.example.com/v1/feedback?p=x&s=y"), env2 as any);
+  assert.ok(seen[0]!.startsWith("https://digest.example.com/v1/feedback"), "the feedback actor builds its links from https://");
+});
+
+test("sign-in links in the email are https:// even though the request arrived as http://", async () => {
+  const { env } = fakeEnv();
+  const sent: string[] = [];
+  const env3 = {
+    ...env,
+    SECRETS: { get: async (n: string) => ({ AGENT_AUTH_KEY: KEY, DIGEST_EMAIL_TO: "admin@example.com", DIGEST_EMAIL_FROM: "digest@example.com" })[n] ?? "" },
+    TELNYX: { get: async () => ({}), post: async (_p: string, { body }: any) => void sent.push(body.text_body) },
+    AI_DIGEST: { idFromName: () => ({ magicRequested: async () => ({ ok: true }) }) },
+  };
+  await route(new Request("http://digest.example.com/v1/app/sign-in", { method: "POST" }), env3 as any);
+  assert.match(sent[0]!, /https:\/\/digest\.example\.com\/v1\/app\/auth\?t=/);
 });
 

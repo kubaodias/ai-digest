@@ -10,6 +10,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Magic-link sign-in** for the page: the link is emailed to `ADMIN_EMAIL` (new, optional) or the first `DIGEST_EMAIL_TO`, works once, expires in 15 minutes, and at most one is sent per minute. It sets a signed session cookie for 30 days. Keys are derived from `AGENT_AUTH_KEY`, so no new secret is needed.
 - `npm run deploy` prints the page's address; screenshots of the page in the docs.
 
+### Fixed
+
+- Links built from the incoming request said `http://`, because TLS ends before the function: the feedback page's change, undo and reason links and its "View the digest" link. The router now treats requests as `https://` (honouring `X-Forwarded-Proto`; localhost unchanged), so these links and the new sign-in links are `https://` and the `Secure` session cookie works.
+
 ## [0.2.1] - 2026-11-07
 
 ### Fixed
