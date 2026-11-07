@@ -19,7 +19,11 @@ function deps(over: Partial<AppDeps> = {}) {
     adminEmail: "admin@example.com",
     now: () => NOW,
     digests: {
-      listDigests: async () => [{ id: "agent-memory", markdown: example, updatedAt: "2026-11-07T22:00:00Z", versions: 2 }],
+      // The real shape: the digests actor's listDigests() returns summaries, not definition text.
+      listDigests: async () => [
+        { id: "agent-memory", title: "Agent Memory Weekly — {range}", windowDays: 14, items: { min: 5, max: 10 }, schedule: null, updatedAt: "2026-11-07T22:00:00Z", versions: 2 },
+        { id: "broken", title: null, windowDays: null, items: null, schedule: null, updatedAt: "2026-11-07T22:00:00Z", versions: 1 },
+      ],
       getDigest: async (id) => (id === "agent-memory" ? { id, markdown: example, updatedAt: "2026-11-07T22:00:00Z", versions: 2 } : null),
       magicRequested: async (now) => (now - lastMagic < 60_000 ? { ok: false, retryIn: 42 } : ((lastMagic = now), { ok: true })),
       consumeMagic: async (n) => (used.has(n) ? false : (used.add(n), true)),
@@ -110,6 +114,8 @@ test("the list page shows each digest with its last issue, votes and memory", as
   assert.match(html, /Last issue 7 Nov 2026 · 7 items/);
   assert.match(html, /1 vote · 2 memories · updated 7 Nov 2026 \(v2\)/, "singular and plural");
   assert.match(html, /href="\/v1\/app\/digests\/agent-memory"/);
+  assert.doesNotMatch(html.split("broken")[0]!, /Invalid definition/, "a valid digest isn't shown as invalid");
+  assert.match(html, /Invalid definition/, "an invalid one is");
   assert.match(html, /AI Digest · made with/);
 });
 

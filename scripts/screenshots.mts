@@ -12,6 +12,7 @@ import { renderEmailHtml } from "../src/agent.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "../src/assets.ts";
 import { addFeedbackLinks, digestItems, nextVote, preferencesFrom, thanksPage, type DigestItemRecord } from "../src/feedback.ts";
 import { digestPage, listPage } from "../src/app.ts";
+import { parseProfile } from "../src/profile.ts";
 import { computePreferences } from "../src/preferences.ts";
 
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -63,7 +64,11 @@ const server = http.createServer(async (req, res) => {
     { id: "20261031-q1zr", profile: "agent-memory", subject: "Agent Memory Weekly — Oct 18 – Nov 1, 2026", sentAt: "2026-10-31T08:00:00Z", items: 8 },
     { id: "20261107-gfar", profile: "ai-swe", subject: "AI & Software Engineering Digest — 1–7 November 2026", sentAt: "2026-11-07T10:20:00Z", items: 13 },
   ];
-  if (url.pathname === "/app") return send(await listPage(stored, { issues, votes: { "agent-memory": 3, "ai-swe": 5 } }, { "agent-memory": 4, "ai-swe": 8 }).text(), "text/html");
+  const summaries = stored.map((d) => {
+    const p = parseProfile(d.id, d.markdown);
+    return { id: d.id, title: p.title, windowDays: p.windowDays, items: p.items, schedule: p.schedule ?? null, updatedAt: d.updatedAt, versions: d.versions };
+  });
+  if (url.pathname === "/app") return send(await listPage(summaries, { issues, votes: { "agent-memory": 3, "ai-swe": 5 } }, { "agent-memory": 4, "ai-swe": 8 }).text(), "text/html");
   if (url.pathname === "/app-digest") {
     const prefs = computePreferences([
       { vote: "up", headline: "Mem0 state of memory", tags: ["agent memory", "benchmarks"], entities: ["mem0"], source: "mem0.ai", reasons: [{ r: "entity", target: "mem0" }], at: "2026-11-07T21:37:00Z" },

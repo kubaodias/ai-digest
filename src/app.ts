@@ -77,6 +77,16 @@ export interface StoredDigest {
   updatedAt: string;
   versions: number;
 }
+/** What the digests actor's listDigests() returns: a summary per digest (no definition text). */
+export interface DigestSummary {
+  id: string;
+  title: string | null;
+  windowDays: number | null;
+  items: { min: number; max: number } | null;
+  schedule: string | null;
+  updatedAt: string;
+  versions: number;
+}
 export interface IssueSummary {
   id: string;
   profile: string;
@@ -136,21 +146,18 @@ export function checkInboxPage(address: string): Response {
   return page("Check your inbox", `<div class="card"><h2>Check your inbox</h2><p class="muted">A sign-in link is on its way to ${esc(maskEmail(address))}. It works once, for ${MAGIC_MINUTES} minutes.</p></div>`, 200, { css });
 }
 
-export function listPage(digests: StoredDigest[], overview: Overview, memory: Record<string, number>): Response {
+export function listPage(digests: DigestSummary[], overview: Overview, memory: Record<string, number>): Response {
   if (!digests.length) {
     return page("Your digests", chrome(`<div class="card"><p class="muted">No digests stored yet. Add a file to <code>digests/</code> and run <code>npm run digests -- push</code>.</p></div>`), 200, { css, wide: true });
   }
   const cards = digests
     .map((d) => {
-      let p: DigestProfile | undefined;
-      try {
-        p = parseProfile(d.id, d.markdown);
-      } catch {}
       const last = overview.issues.find((i) => i.profile === d.id);
+      const shape = d.windowDays && d.items ? `${d.windowDays} days · ${d.items.min === d.items.max ? d.items.min : `${d.items.min}–${d.items.max}`} items${d.schedule ? ` · ${esc(d.schedule)}` : ""}` : "";
       return `<a class="card" href="${APP}/digests/${d.id}" style="text-decoration:none;color:inherit">
   <span class="id">${esc(d.id)}</span>
-  <h2>${esc((p?.title ?? "(invalid definition)").replace("{range}", "…").replace(/\s*—\s*…$/, ""))}</h2>
-  <span class="muted" style="font-size:14px">${p ? `${p.windowDays} days · ${p.items.min}–${p.items.max} items${p.schedule ? ` · ${esc(p.schedule)}` : ""}` : ""}</span>
+  <h2>${d.title ? esc(d.title.replace("{range}", "…").replace(/\s*—\s*…$/, "")) : `<span class="less">Invalid definition</span>`}</h2>
+  <span class="muted" style="font-size:14px">${shape}</span>
   <span class="faint">${last ? `Last issue ${date(last.sentAt)} · ${last.items} items` : "No issues yet"}</span>
   <span class="faint">${plural(overview.votes[d.id] ?? 0, "vote")} · ${plural(memory[d.id] ?? 0, "memory", "memories")} · updated ${date(d.updatedAt)} (v${d.versions})</span>
 </a>`;
@@ -210,7 +217,7 @@ export interface AppDeps {
   feedbackKey?: string;
   /** Where sign-in links go. */
   adminEmail?: string;
-  digests: { listDigests(): Promise<StoredDigest[]>; getDigest(id: string): Promise<StoredDigest | null>; magicRequested(now: number): Promise<{ ok: boolean; retryIn?: number }>; consumeMagic(nonce: string, exp: number): Promise<boolean> };
+  digests: { listDigests(): Promise<DigestSummary[]>; getDigest(id: string): Promise<StoredDigest | null>; magicRequested(now: number): Promise<{ ok: boolean; retryIn?: number }>; consumeMagic(nonce: string, exp: number): Promise<boolean> };
   feedback: { appOverview(): Promise<Overview>; feedbackStats(profile: string): Promise<Preferences> };
   memory: { counts(): Promise<Record<string, number>>; summary(profile: string): Promise<string | null> };
   sendEmail(to: string, subject: string, text: string, html: string): Promise<void>;
