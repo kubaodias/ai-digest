@@ -19,7 +19,7 @@ import { mayUseFrontDoor } from "./auth.ts";
 import { SECRET, secret } from "./config.ts";
 import { ID_PATTERN, ProfileError, parseProfile, runConversation, runMessage } from "./profile.ts";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.2.1";
 export const FEEDBACK_ACTOR = "feedback";
 export const DIGESTS_ACTOR = "digests";
 
