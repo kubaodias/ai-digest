@@ -1,0 +1,132 @@
+# How AI Digest works
+
+## The pieces
+
+| Piece | Runs on | Code |
+|---|---|---|
+| Research and writing | Telnyx Inference (`deepseek-ai/DeepSeek-V4.1-Flash`) with Telnyx Web Search (`web_search`, `fetch_page`) | `src/instructions.ts`, `agent.json` |
+| The agent | Telnyx Edge Compute: one durable actor per conversation | `src/agent.ts` |
+| Picking pictures | Telnyx Inference (`Qwen/Qwen3.8-27B`, vision) | `src/images.ts` |
+| Delivery | Telnyx Email (`POST /v2/emails`) | `src/agent.ts` |
+| Feedback | The `feedback` conversation of the same agent | `src/feedback.ts`, `src/preferences.ts` |
+| Preference summary | Telnyx Agent Memory (namespace `ai-digest`) | `docs/memory-summary-instructions.md` |
+
+The agent is a [code-kind](https://developers.telnyx.com/docs/agents) ACP agent: a class extending the managed agent loop, so it gets the harness, tools and durable state, plus its own HTTP routes and hooks.
+
+## A digest, step by step
+
+1. **A request arrives**: `telnyx-acp invoke ai-digest --conversation <name> "<request>"`. Each conversation name is its own actor.
+2. **Preferences:** the model calls `reader_preferences` first. It returns the reader's entity, topic and source preferences from the vote log, plus the Agent Memory profile summary. It asks the memory service to rebuild a stale summary and waits up to a minute for it.
+3. **Research:** up to about 25 `web_search` and `fetch_page` calls, 3–5 in parallel, across community sites, AI labs, newsletters and engineering blogs. The instructions require items found in this run, links to the specific article (never a front page), and primary sources over reposts.
+4. **Writing:** 5–15 numbered items (`## N. Headline`, *Why it matters*, *Source*) and a closing *Themes* section.
+5. **Delivery is deterministic.** The model has no email tool. When a run completes, the agent's post-run hook (`rememberRun`) checks whether the reply is a digest, i.e. it has numbered `## N.` items. If so, it:
+   - picks pictures (below);
+   - adds a feedback row to each item and tags each item with topics and entities (one text-only Qwen call);
+   - renders an email-safe HTML version (inline styles; images as captioned blocks);
+   - sends it through `POST /v2/emails` with `text_body` (the Markdown) and `html_body`;
+   - stores the digest (items, article URLs, tags, pictures, HTML) with the `feedback` actor, keeping the newest 12;
+   - records `emailedAt`, so a retried hook doesn't send twice.
+
+   The sender, recipients and public URL come from secrets (`src/config.ts`), never from the model.
+
+## Picking pictures
+
+For each item, `src/images.ts`:
+
+1. **Finds the article.** It uses the first non-HN link; HN threads are followed to the story via the HN API.
+2. **Collects candidates from the article body** (the largest `<article>`, else `<main>`), best first:
+   - figures with a caption or descriptive alt text;
+   - in-body images with descriptive alt text;
+   - other figures and images;
+   - the `og:image` share image last, since it's usually a branded banner.
+
+   Logos, icons, avatars, "card image" teasers and tracking pixels are skipped. Up to 6 candidates.
+3. **Fixes URLs:**
+   - SVG diagrams are converted to PNG when the host can render one; Contentful's image API does it with `fm=png`, e.g. OpenAI's diagrams. Other SVGs are dropped, because Gmail doesn't render SVG.
+   - GitHub's signed `private-user-images` links expire in 5 minutes, so they're rewritten to the permanent `github.com/user-attachments/assets/<id>`. Other signed, expiring links are dropped.
+4. **Checks the shape from the image header:** at least 500 px wide, and not taller than wide.
+5. **Asks Qwen3.8** to score each one 0–10 for how much it helps an engineer understand *this* item: charts, diagrams and screenshots score high; stock, logos and banners score low. Qwen reasons by default and can spend the whole token budget before answering, so the request sets `reasoning_effort: "none"`; it then answers in about a second.
+6. **Keeps up to 2 pictures scoring 7 or more**, with a short caption: the page's own caption, or the model's one-sentence description.
+
+The whole step has a 75-second budget. Items whose articles fail, or have nothing relevant, simply get no picture.
+
+## Feedback
+
+### The links
+
+Each item ends with **Useful? 👍 👎**. The grey icons are served by the agent itself. A link carries a signed payload, HMAC-SHA256 with the `FEEDBACK_KEY` secret:
+
+```
+{ d: digest id, i: item number, v: "up" | "down", e: expiry (90 days), r?: reason, x?: entity index }
+```
+
+Links are about 170 characters, because the item's details stay on the server, in the stored digest. A click is a `GET` to the agent's `feedback` conversation. The actor checks the signature and expiry, records the vote, and returns a page showing:
+
+1. the article title, linked;
+2. the vote, with reason options to toggle, plus change, undo and *View the digest* (the stored email);
+3. the article's summary, picture, source, entities and tags;
+4. *What this feeds*: one sentence on what the vote changes, and your current preferences for this item's entities and topics.
+
+Clicking a reason, change or undo updates the page in place and replaces its history entry, so one Back returns to the email.
+
+### Reasons
+
+A thumb alone doesn't say *why*. The 👎 page offers:
+
+- **I don't use *X***: one option per entity, since an item about Postman also mentions Codex and Claude Code;
+- **Not interested in *topics***;
+- **I already knew this**.
+
+The 👍 page offers *More on topics*, *More about X* and *X is a good source*. Any number can be selected, and clicking a selected one deselects it. Clicking the same thumb again keeps them; flipping 👍/👎 clears them.
+
+### From votes to preferences (`src/preferences.ts`)
+
+Each vote adds weight toward the item's main entity (or the entity you picked), its other entities, its topics and its source:
+
+| Reason | Main or chosen entity | Other entities | Topics | Source |
+|---|---|---|---|---|
+| none | 0.7 | 0.2 | 0.25 | 0.1 |
+| I don't use X / more about X | 1 (that entity) | 0 | 0 | 0 |
+| not interested / more on topics | 0.3 | 0 | 1 | 0 |
+| good source | 0 | 0 | 0 | 1 |
+| already knew | 0 | 0 | 0 | 0 |
+
+With several reasons on one vote, each entity, topic and source takes the strongest weight any of them gives it, so nothing is counted twice.
+
+- **An entity** becomes a preference from one vote (score ≥ 0.7).
+- **A topic** needs a score of 0.75 *and* either an explicit topic reason or 3 votes the same way. Until then it's listed as *tentative* and ignored. One 👎 on a Postman story means "skip Postman", not "less dev tooling".
+- **A source** needs an explicit reason or many votes.
+
+The model is told to apply entity preferences strictly, topic preferences softly, ignore tentative topics, and never drop major news because of a preference.
+
+### Agent Memory
+
+Each vote also writes sentences to [Agent Memory](https://developers.telnyx.com/docs/agent-memory) (namespace `ai-digest`, profile from `DIGEST_MEMORY_PROFILE`, session `fb-<digest>-<item>`), one per reason, e.g. *"I don't use Postman — skip news mainly about Postman. This says nothing about the wider topic."* Changing a vote re-ingests the same session in place.
+
+Undo deletes the memory source, and again two minutes later: ingestion is asynchronous, so a memory still being extracted could otherwise land after the first delete.
+
+The memory service turns these into a profile summary. Two details matter:
+
+- **It only builds the summary when asked** (`GET …/summary?refresh=true`). A plain read of a stale summary returns `null` and builds nothing. `reader_preferences` asks, and waits.
+- **The summary's shape is set by namespace instructions** (`PATCH /v2/ai/memory/namespaces/ai-digest/settings`). [Ours](memory-summary-instructions.md) restricts it to *Wants more of / Wants less of / Sources / Patterns* and rules out identity, location and remarks about the data itself.
+
+The vote log is the source of truth. The memory summary is a softer, readable view of it.
+
+## What's stored where
+
+| Data | Where | Kept |
+|---|---|---|
+| Your settings (sender, recipients, URL, signing key) | Telnyx secrets on your account | until you change them |
+| Votes (with reasons, entities, tags) | The `feedback` actor's durable state | until undone |
+| Sent digests (items + email HTML) | The `feedback` actor's durable state | newest 12 |
+| Preference sentences and the profile summary | Agent Memory, namespace `ai-digest` | until deleted |
+| Research conversations | Each conversation's actor | per the platform |
+
+Nothing is kept outside your Telnyx account. The agent never writes conversations to memory; the only memory writes are the feedback sentences.
+
+## Security notes
+
+- Feedback links are signed and expire. Without the key, nobody can forge votes.
+- The model can't choose who gets email: the recipients come from a secret.
+- The `feedback` actor's internal methods (`registerDigest`, `feedbackStats`) are reached in-process only. They aren't `@rpc`, so they're not exposed on the public URL.
+- The feedback pages are `noindex` and `no-store`.

@@ -1,0 +1,8 @@
+# written by `telnyx-acp deploy`; never commit it
+.telnyx/
+node_modules/
+# your settings and keys (see .env.example)
+.env
+.env.*
+!.env.example
+.DS_Store

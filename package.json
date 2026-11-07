@@ -1,0 +1,31 @@
+{
+  "name": "ai-digest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An AI agent on Telnyx Edge Compute that researches the week's AI and software engineering news, emails a digest with relevant pictures, and learns from thumbs feedback.",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kubaodias/ai-digest.git"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/",
+    "deploy": "node scripts/deploy.mjs",
+    "release": "node scripts/release.mjs",
+    "screenshots": "node --experimental-strip-types scripts/screenshots.mts"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "dependencies": {
+    "@telnyx/acp": "0.1.0-beta.28",
+    "@telnyx/edge-runtime": "0.16.1",
+    "ai": "6.0.266",
+    "marked": "18.1.1",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "puppeteer-core": "24.10.0"
+  }
+}
