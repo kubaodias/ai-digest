@@ -91,10 +91,11 @@ async function main() {
     case "status": {
       if (!rest[0]) fail("Usage: npm run digests -- status <conversation>");
       const s = await agentApi(env, "GET", `/v1/runs/${rest[0]}`);
-      if (!s.traces?.length) return console.log("No runs yet in that conversation.");
-      for (const t of s.traces) {
-        const secs = t.durationMs ? `${Math.round(t.durationMs / 1000)} s` : "";
-        console.log(`${t.runId ?? t.id ?? "run"}  ${t.status ?? ""}  ${secs}  ${t.toolCalls ?? ""} tool calls  ${t.tokens ?? ""} tokens`.replace(/\s+/g, " "));
+      if (!s.runs?.length) return console.log("No runs yet in that conversation.");
+      for (const r of s.runs) {
+        const took = r.durationMs ? `${Math.floor(r.durationMs / 60000)} m ${Math.round((r.durationMs % 60000) / 1000)} s` : "running";
+        const started = r.startedAt ? new Date(r.startedAt).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "";
+        console.log(`${r.status ?? "?"}  ${took}  ${r.toolCalls ?? 0} tool calls  ${r.tokens?.total?.toLocaleString("en") ?? "?"} tokens  started ${started}`);
       }
       return;
     }

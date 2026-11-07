@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- `GET /v1/runs/<conversation>` returned the actor's `{ runs }` object as `traces`, so `npm run digests -- status` always said "No runs yet". It now returns `runs` as a list, and `status` prints each run's status, duration, tool calls and tokens.
+
 ## [0.2.0] - 2026-11-07
 
 Digests on any topic, each defined in its own file, on a function with its own entry point and a versioned API.

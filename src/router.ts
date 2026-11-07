@@ -10,7 +10,7 @@
 //   PUT    /v1/digests/<id>               operator token   store a definition (body: Markdown)
 //   DELETE /v1/digests/<id>               operator token   delete a definition
 //   POST   /v1/digests/<id>/runs          operator token   start a run: {"message"?, "run"?}
-//   GET    /v1/runs/<conversation>        operator token   a run's recent steps
+//   GET    /v1/runs/<conversation>        operator token   the conversation's recent runs
 //
 //   GET    /agents/ai-digest/feedback?…   signed links     same as /v1/feedback (links in emails sent before 0.2.0)
 
@@ -93,7 +93,8 @@ export async function route(req: Request, env: RouterEnv): Promise<Response> {
       }
     }
     if (parts[0] === "runs" && parts[1] && parts.length === 2 && method === "GET") {
-      return json(200, { conversation: parts[1], traces: await actor(parts[1]).traces(5) });
+      const t = await actor(parts[1]).traces(5);
+      return json(200, { conversation: parts[1], runs: Array.isArray(t?.runs) ? t.runs : [] });
     }
   } catch (err) {
     console.log(JSON.stringify({ api: "error", path, error: err instanceof Error ? err.message : String(err) }));

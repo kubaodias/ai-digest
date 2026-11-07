@@ -24,7 +24,7 @@ function fakeEnv(key: string | undefined = KEY) {
           putDigest: async (id: string, md: string) => (rec("putDigest", [id]), store.set(id, md), { id, changed: true }),
           deleteDigest: async (id: string) => (rec("deleteDigest", [id]), { id, deleted: store.delete(id) }),
           receive: async (text: string) => (rec("receive", [text]), { runId: "run-1" }),
-          traces: async (n: number) => (rec("traces", [n]), [{ id: "run-1" }]),
+          traces: async (n: number) => (rec("traces", [n]), { runs: [{ runId: "run-1", status: "completed", durationMs: 260233, toolCalls: 26 }] }),
         };
       },
     },
@@ -92,7 +92,7 @@ test("runs: start one for a stored digest in its own conversation, with the defi
   assert.match(String(receive.args[0]), /Agent Memory Weekly/);
   assert.match(String(receive.args[0]), /For this issue in particular: focus on MCP/);
   const status = await route(req("/v1/runs/agent-memory--w45", { headers: h }), env);
-  assert.deepEqual((await status.json()).traces, [{ id: "run-1" }]);
+  assert.deepEqual((await status.json()).runs, [{ runId: "run-1", status: "completed", durationMs: 260233, toolCalls: 26 }], "runs as a list (the actor returns { runs })");
 });
 
 test("run names: the caller's if safe, else the current time", () => {
