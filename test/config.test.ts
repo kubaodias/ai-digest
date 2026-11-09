@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { loadConfig, parseRecipients } from "../src/config.ts";
 import { feedbackBase } from "../src/feedback.ts";
 
@@ -33,4 +34,10 @@ test("recipients: separated by commas, semicolons or spaces; invalid entries dro
 
 test("the feedback URL is built from the public URL", () => {
   assert.equal(feedbackBase("https://agent.example.com/"), "https://agent.example.com/v1/feedback");
+});
+
+test("the memory summary instructions fit Agent Memory's 2000-character limit", () => {
+  const md = readFileSync(new URL("../docs/memory-summary-instructions.md", import.meta.url), "utf8");
+  const sent = md.replace(/^<!--[\s\S]*?-->\s*/, "").trim(); // what npm run deploy sends
+  assert.ok(sent.length <= 2000, `${sent.length} characters`);
 });
