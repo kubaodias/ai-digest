@@ -265,7 +265,9 @@ test("storing a definition arms its watch timer; deleting it stops the timer and
   const h = await auth();
   const r = await route(req("/v1/digests/harness-watch", { method: "PUT", headers: h, body: watching }), env);
   assert.equal(r.status, 200);
-  assert.deepEqual((await r.json()).watching, { watching: true });
+  const put = await r.json();
+  assert.deepEqual(put.watching, { watching: true });
+  assert.deepEqual(put.scouting, { scouting: true }, "the 0.5.0 shape, unchanged in /v1");
   await route(req("/v1/digests/harness-watch", { method: "DELETE", headers: h }), env);
   assert.deepEqual(calls.filter((c) => c.method === "poolConfigure").map((c) => c.actor), ["harness-watch--pool"]);
   assert.deepEqual(calls.filter((c) => c.method === "poolDelete").map((c) => c.actor), ["harness-watch--pool"]);
@@ -284,7 +286,7 @@ test("check and pool routes: a check now (with a replay window), the pool, only 
   assert.equal((await route(req("/v1/digests/harness-watch/scout", { method: "POST", headers: h, body: JSON.stringify({ since: "2026-11-04", until: "2026-11-02" }) }), env)).status, 400, "/scout, the 0.5.0 path, still works");
   const not = await route(req("/v1/digests/agent-memory/check", { method: "POST", headers: h, body: "{}" }), env);
   assert.equal(not.status, 400);
-  assert.equal((await not.json()).error, "not_watching");
+  assert.equal((await not.json()).error, "not_scouting", "the /v1 error code since 0.5.0");
   const pool = await route(req("/v1/digests/harness-watch/pool", { headers: h }), env);
   assert.deepEqual((await pool.json()).counts, { candidates: 2 });
   assert.equal((await route(req("/v1/digests/missing/pool", { headers: h }), env)).status, 404);
@@ -295,7 +297,7 @@ test("a run of a watching digest writes from the pool: after a check, or right a
   const h = { ...(await auth()), "content-type": "application/json" };
   store.set("harness-watch", watching);
   const a = await (await route(req("/v1/digests/harness-watch/runs", { method: "POST", headers: h, body: JSON.stringify({ message: "security angle" }) }), env)).json();
-  assert.equal(a.mode, "check-then-write");
+  assert.equal(a.mode, "scout-then-write", "the /v1 value since 0.5.0");
   assert.deepEqual(calls.at(-1)!.args[0], { force: { focus: "security angle" } });
   const b = await (await route(req("/v1/digests/harness-watch/runs", { method: "POST", headers: h, body: JSON.stringify({ check: false }) }), env)).json();
   assert.equal(b.mode, "from-pool");

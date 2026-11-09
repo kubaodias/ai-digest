@@ -102,7 +102,7 @@ async function main() {
       if (!id) fail("Usage: npm run digests -- run <id> [focus for this issue] [--run <name>] [--from-pool]");
       const r = await agentApi(env, "POST", `/v1/digests/${id}/runs`, { ...(runName ? { run: runName } : {}), ...(focus.length ? { message: focus.join(" ") } : {}), ...(fromPool ? { check: false } : {}) });
       if (r.ok === false) fail(r.error);
-      if (r.mode === "check-then-write") console.log(`Started a check for ${r.digest} (${r.conversation}); an issue is written from the pool when it's done.`);
+      if (r.mode === "scout-then-write") console.log(`Started a check for ${r.digest} (${r.conversation}); an issue is written from the pool when it's done.`);
       else if (r.mode === "from-pool") console.log(`Writing ${r.digest} from its pool now; follow it with: npm run digests -- pool ${r.digest}`);
       else console.log(`Started ${r.digest} in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
       if (r.conversation) console.log(`Follow it: npm run digests -- status ${r.conversation}`);

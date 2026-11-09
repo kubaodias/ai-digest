@@ -314,6 +314,8 @@ test("the writer request: limited link checks, several sources per item, trendin
 test("tool budgets: checks and issues are capped in code, other runs aren't", () => {
   assert.equal(toolBudget("ai-swe--2026-11-09t1500"), undefined);
   assert.equal(toolBudget("ai-swe--pool"), undefined);
+  assert.equal(toolBudget("__general--check-point-security-2026-11-09t1200"), undefined, "a one-off on a topic that starts with 'check' is no check");
+  assert.equal(toolBudget("__general--issue-tracking-2026-11-09t1200"), undefined);
   const check = toolBudget("harness-test--check-2026-11-09t151355")!;
   const used = { search: 0, fetch: 0 };
   for (let k = 0; k < CHECK_BUDGET; k++) assert.equal(spendTool(check, used, k % 2 ? "/web_search" : "/web_search/contents"), undefined);

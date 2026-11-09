@@ -6,12 +6,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- **Scouting is now called watching.** The setting is `watch: 6h`; a pass is a **check**, run in `<digest>--check-<time>`. `POST /v1/digests/<id>/check` starts one (`npm run digests -- watch <id>`), `"check": false` on a run writes from the pool (`npm run digests -- run <id> --from-pool`), the digests page shows a "Watching" card, and `GET /v1/digests` and `PUT` return `watch` and `watching`. The 0.5.0 names still work: `scout:` in a definition, `/scout`, `"scout": false`, `--no-scout`, `npm run digests -- scout`, and the `scout`/`scouting` response fields.
+- **Scouting is now called watching.** The setting is `watch: 6h`; a pass is a **check**, run in `<digest>--check-<time>`. `POST /v1/digests/<id>/check` starts one (`npm run digests -- watch <id>`), `"check": false` on a run writes from the pool (`npm run digests -- run <id> --from-pool`), the digests page shows a "Watching" card, and responses add `watch`, `watching`, `checks`, `lastCheckAt` and so on. Nothing in /v1 changed for 0.5.0 clients: `scout:` in a definition, `/scout`, `"scout": false`, `--no-scout` and `npm run digests -- scout` still work, responses keep every 0.5.0 field in its 0.5.0 shape (`scout` with `scoutHours`, `scouting`, `passes`, `lastPassAt`, …), and `mode: "scout-then-write"` and the `not_scouting` error keep their values.
+- A pool created by 0.5.0 is carried over: its state is renamed on first use, its old timers are replaced, and a check queued or running across the upgrade still reaches the pool.
 - README: watching in the definition example, the commands, the diagram and the project layout.
 
 ### Fixed
 
 - A run can't be named `pool`, `check-…`, `issue-…` or `scout-…` any more (`--run`, `"run"`): those are a watching digest's own conversations, so such a run reached the pool actor or got a check's tool budget. It gets the time-based name instead.
+- A one-off digest whose topic starts with "check" or "issue" (`ask "Check Point …"`) no longer gets a check's or an issue's web tool budget.
+- `scout: off` next to `watch: 6h` (or the other way round) is accepted; only both on is an error.
 
 ## [0.5.0] - 2026-11-09
 

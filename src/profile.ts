@@ -80,8 +80,9 @@ function intIn(id: string, key: string, v: string, min: number, max: number, uni
 
 /** The watching settings, or undefined without `watch:` (`scout:` is its old name). The others need it. */
 function parseWatch(id: string, s: Record<string, string>, items: { min: number; max: number }): DigestProfile["watch"] {
-  if (s.watch !== undefined && s.scout !== undefined) throw new ProfileError(id, `"scout" is the old name of "watch": keep only "watch"`);
-  const key = s.watch !== undefined ? "watch" : "scout";
+  const off = (v: string | undefined) => v === undefined || /^(off|no|none)$/i.test(v);
+  if (!off(s.watch) && !off(s.scout)) throw new ProfileError(id, `"scout" is the old name of "watch": keep only "watch"`);
+  const key = !off(s.scout) || (s.watch === undefined && s.scout !== undefined) ? "scout" : "watch";
   const every = s[key];
   if (every === undefined || /^(off|no|none)$/i.test(every)) {
     const stray = WATCH_ONLY.find((k) => s[k] !== undefined);

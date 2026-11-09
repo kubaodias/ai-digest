@@ -187,7 +187,10 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
           const stored = await actor(DIGESTS_ACTOR).putDigest(id, markdown);
           // Arm, re-arm or cancel the watch timer (every deploy pushes every definition, so this also repairs a lost timer).
           const watching = await attempt(() => actor(poolOf(id)).poolConfigure()).catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
-          return json(200, { ...stored, watching, scouting: watching /* the 0.5.0 name */ });
+          // `scouting`: the same answer in its 0.5.0 shape, unchanged in /v1.
+          const w: any = watching;
+          const scouting = "error" in w ? w : { digest: w.digest, scouting: w.watching, ...(w.everyHours ? { everyHours: w.everyHours } : {}), ...(w.kept ? { kept: true } : {}), ...(w.firstCheckInMin !== undefined ? { firstPassInMin: w.firstCheckInMin } : {}), ...(w.cleared !== undefined ? { cleared: w.cleared } : {}) };
+          return json(200, { ...stored, watching, scouting });
         }
         if (method === "DELETE") {
           const deleted = await actor(DIGESTS_ACTOR).deleteDigest(id);
@@ -205,7 +208,7 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
       if (id && (parts[2] === "check" || parts[2] === "scout") && parts.length === 3 && method === "POST") {
         const d = await actor(DIGESTS_ACTOR).getDigest(id);
         if (!d) return json(404, { error: "not_found", message: `no digest "${id}"` });
-        if (!parseProfile(id, d.markdown).watch) return json(400, { error: "not_watching", message: `"${id}" doesn't watch: add "watch: 6h" to its definition and push it` });
+        if (!parseProfile(id, d.markdown).watch) return json(400, { error: "not_scouting" /* the /v1 code since 0.5.0 */, message: `"${id}" doesn't watch: add "watch: 6h" to its definition and push it` });
         const body = await req.json().catch(() => ({}));
         let since: string | undefined, until: string | undefined;
         try {
@@ -227,7 +230,7 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
           const focus = typeof body?.message === "string" ? body.message : undefined;
           const fromPool = body?.check === false || body?.scout === false;
           const r = fromPool ? await actor(poolOf(id)).writeNow({ focus }) : await actor(poolOf(id)).startCheck({ force: { focus } });
-          return json(r.ok ? 202 : 409, { digest: id, mode: fromPool ? "from-pool" : "check-then-write", ...r });
+          return json(r.ok ? 202 : 409, { digest: id, mode: fromPool ? "from-pool" : "scout-then-write" /* the /v1 value since 0.5.0: a check, then an issue */, ...r });
         }
         const conversation = runConversation(id, runName(body?.run));
         const message = runMessage(parseProfile(id, d.markdown), typeof body?.message === "string" ? body.message : undefined);

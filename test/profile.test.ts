@@ -151,4 +151,7 @@ test("watching settings: defaults, ranges, and they need watch", () => {
   assert.equal(parseProfile("x", file("title: x\nscout: 6h")).watch?.watchHours, 6);
   assert.match(err("x", file("title: x\nscout: 25h")), /"scout" must be 1h–24h/);
   assert.match(err("x", file("title: x\nwatch: 6h\nscout: 6h")), /"scout" is the old name of "watch"/);
+  assert.equal(parseProfile("x", file("title: x\nwatch: 6h\nscout: off")).watch?.watchHours, 6, "an old line that's off doesn't conflict");
+  assert.equal(parseProfile("x", file("title: x\nwatch: off\nscout: 12h")).watch?.watchHours, 12);
+  assert.equal(parseProfile("x", file("title: x\nwatch: off\nscout: off")).watch, undefined);
 });

@@ -3,7 +3,7 @@
 // the pool (no new search). Kept apart from agent.ts so the class file has no
 // long template strings. Pure; covered by test/pool.test.ts.
 
-import type { DigestProfile } from "./profile.ts";
+import { GENERAL_ID, type DigestProfile } from "./profile.ts";
 import type { PoolEntry } from "./pool.ts";
 import { KNOWN_IN_REQUEST, MAX_PER_ENTITY, MAX_PER_CHECK, trending } from "./pool.ts";
 
@@ -26,6 +26,8 @@ export interface ToolBudget {
 }
 
 export function toolBudget(conversation: string): ToolBudget | undefined {
+  // One-off General runs are named after their topic ("__general--check-point-…"): never a check or an issue.
+  if (conversation.startsWith(`${GENERAL_ID}--`)) return undefined;
   if (/--check-[a-z0-9-]+$/.test(conversation)) return { search: CHECK_BUDGET, fetch: CHECK_BUDGET, total: CHECK_BUDGET, what: "this check" };
   if (/--issue-[a-z0-9-]+$/.test(conversation)) return { search: 0, fetch: WRITER_CHECKS, total: WRITER_CHECKS, what: "writing this issue" };
   return undefined;
