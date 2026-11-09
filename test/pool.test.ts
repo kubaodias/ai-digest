@@ -274,8 +274,9 @@ test("capPerEntity: at most two candidates per product per pass, most important 
   assert.equal(r.capped, 1);
 });
 
-test("trending: three independent sources; being found again isn't wide coverage", () => {
-  assert.equal(trending({ sources: [1, 2, 3].map((k) => ({ domain: `d${k}`, url: "u" })) }), true);
+test("trending: four independent sources; being found again isn't wide coverage", () => {
+  assert.equal(trending({ sources: [1, 2, 3, 4].map((k) => ({ domain: `d${k}`, url: "u" })) }), true);
+  assert.equal(trending({ sources: [1, 2, 3].map((k) => ({ domain: `d${k}`, url: "u" })) }), false);
   assert.equal(trending({ sources: [{ domain: "a", url: "u" }, { domain: "b", url: "u" }] }), false);
 });
 

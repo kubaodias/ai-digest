@@ -335,14 +335,26 @@ export async function pickImages(telnyx: TelnyxPoster, article: string, headline
         if (dim && dim.h > dim.w) throw new Error(`taller than wide (${dim.w}x${dim.h})`);
         const v = await judge(telnyx, `data:${type};base64,${base64(img.bytes)}`, headline, context, c, audience);
         log({ images: "judged", url: c.url, origin: c.origin, score: v.score, kind: v.kind });
-        return { url: c.url, caption: c.caption && c.caption.length <= 200 ? c.caption : v.caption, score: v.score, kind: v.kind, shape: dim ? (dim.w / dim.h).toFixed(2) : undefined };
+        return { url: c.url, caption: c.caption && c.caption.length <= 200 ? c.caption : v.caption, score: v.score, kind: v.kind, shape: dim ? (dim.w / dim.h).toFixed(2) : undefined, og: c.origin === "og" };
       } catch (err) {
         log({ images: "skipped", url: c.url, error: err instanceof Error ? err.message : String(err) });
         return undefined;
       }
     }),
   );
-  const good = judged.filter((j): j is PickedImage & { shape?: string } => !!j && j.score >= MIN_SCORE && !!j.caption).sort((a, b) => b.score - a.score);
+  const good = judged.filter((j): j is PickedImage & { shape?: string; og?: boolean } => !!j && j.score >= MIN_SCORE && !!j.caption).sort((a, b) => b.score - a.score);
+  return distinctPicks(good).slice(0, MAX_IMAGES_PER_ITEM).map(({ shape, og, ...im }) => im);
+}
+
+/**
+ * The pictures worth showing together, best first: one per picture (size
+ * variants, or the same shape in the same folder, count as one), and the
+ * share image (og/twitter) only when the article has nothing else, since it
+ * usually repeats the article's main figure inside a branded card.
+ */
+export function distinctPicks<T extends { url: string; shape?: string; og?: boolean }>(good: T[]): T[] {
+  const own = good.filter((im) => !im.og);
+  if (own.length) good = own;
   // The same picture at two sizes under different names: same folder, same shape.
   const shapes = new Set<string>();
   const distinct = good.filter((im) => {
@@ -352,7 +364,7 @@ export async function pickImages(telnyx: TelnyxPoster, article: string, headline
     shapes.add(k);
     return true;
   });
-  return distinctImages(distinct).slice(0, MAX_IMAGES_PER_ITEM).map(({ shape, ...im }) => im);
+  return distinctImages(distinct);
 }
 
 // ── the digest ───────────────────────────────────────────────────────────────

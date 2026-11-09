@@ -10,7 +10,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **The pool** merges stories by canonical URL (or a model-suggested match that shares an entity or most title words), counts independent sources and repeat sightings (passes report known stories they see again), and scores them by importance, corroboration, sightings, primary source, your feedback (a product you don't use drops a story) and age. Stories older than the digest's `window` expire.
 - **Issues** are written from the chosen stories only, without new searching; pictures are picked at that point, never during passes. Stories the writer drops return to the pool. The title's date range comes from the stories' publication dates ("November 4–7, 2026").
 - **Quality and variety:** forced and `max_gap` issues leave out stories scoring below 5 unless none reach it; a pass adds at most 2 candidates about the same product and searches news and communities, not only release notes; an issue takes at most 2 stories about the same product (the rest wait for the next one) and merges consecutive releases into one item.
-- **Several sources per story:** passes report the other outlets covering a story; issues list up to 3 sources per item (the maker's page first, then reporting, then discussion; no link roundups; the writer looks for the maker's page when a story only has write-ups) and call a story widely covered only from 3 independent sources.
+- **Several sources per story:** passes report the other outlets covering a story; issues list up to 3 sources per item (the maker's page first, then reporting, then discussion; no link roundups; the writer looks for the maker's page when a story only has write-ups) and call a story widely covered only from 4 independent sources; the writer never mentions stories it dropped.
 - **Hard budgets:** a scout pass may make 8 web tool calls and an issue's writer 3 link checks and no searches, enforced in code (calls over budget are refused and the model answers with what it has).
 - **Timers** are spread out (the first pass 1–16 minutes after scouting is turned on, then every interval ± 10 minutes) and kept across deploys, so passes of different digests rarely run at the same time.
 - **Robustness:** a pass's candidates reach the pool through a durable, retried task; a pass whose reply never arrived (e.g. after a runtime restart) is re-delivered or given up the next time a pass is due; requests that start passes or issues return at once. Deleting a digest stops its timer and empties its pool.
@@ -28,7 +28,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- Pictures: the same picture served at several sizes (`chart-medium.jpg`, `chart-small.jpg`, `chart-1024x576.png`) or under two names with the same shape in one folder is shown once, and a picture is never repeated in a later item of the same issue.
+- Pictures: the same picture served at several sizes (`chart-medium.jpg`, `chart-small.jpg`, `chart-1024x576.png`) or under two names with the same shape in one folder is shown once; an article's share image (og/twitter) is used only when it has no picture of its own, since it usually repeats the main figure; and a picture is never repeated in a later item of the same issue.
 - `GET /v1/runs/<conversation>` answers 400 for a name that isn't a conversation instead of passing it to an actor (which failed with a 500).
 
 ### Removed

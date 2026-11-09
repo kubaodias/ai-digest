@@ -86,7 +86,7 @@ export const MAX_PER_ENTITY = 2;
 /** Forced and max_gap issues leave out stories below this score, unless none reach it. */
 export const FLOOR = 5;
 /** A story counts as trending (widely covered) from this many independent sources. */
-export const TRENDING = 3;
+export const TRENDING = 4;
 /** Pool headlines listed in a scout request as "known". */
 export const KNOWN_IN_REQUEST = 60;
 const DAY = 24 * 3600 * 1000;

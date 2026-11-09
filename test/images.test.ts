@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { digestSections, dimensions, distinctImages, extractCandidates, imageKey, rasterUrl, stableUrl } from "../src/images.ts";
+import { digestSections, dimensions, distinctImages, distinctPicks, extractCandidates, imageKey, rasterUrl, stableUrl } from "../src/images.ts";
 
 test("imageKey: one picture at any size is one key; different pictures stay apart", () => {
   const base = "https://static.example.com/story-media/123/HWbLl";
@@ -78,4 +78,14 @@ test("digest sections: numbered items only, image links not counted as article l
   assert.deepEqual(s[0]!.links, ["https://a.com/x"]);
   assert.deepEqual(s[1]!.links, ["https://b.com/y", "https://news.ycombinator.com/item?id=5"]);
   assert.equal(s[1]!.context, "b");
+});
+
+test("distinctPicks: the share image only when there's nothing else; one shape per folder", () => {
+  const fig = { url: "https://static.example.com/m/123/chart-medium.jpg", shape: "1.78" };
+  const og = { url: "https://example.com/og/story.png", shape: "1.91", og: true };
+  assert.deepEqual(distinctPicks([fig, og]).map((p) => p.url), [fig.url]);
+  assert.deepEqual(distinctPicks([og]).map((p) => p.url), [og.url]);
+  const twin = { url: "https://static.example.com/m/123/HWbLl-small.jpg", shape: "1.78" };
+  const other = { url: "https://static.example.com/m/123/diagram.png", shape: "1.33" };
+  assert.deepEqual(distinctPicks([fig, twin, other]).map((p) => p.url), [fig.url, other.url]);
 });
