@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Custom domains: when `PUBLIC_URL` is a custom domain, `npm run deploy` declares it in the function's manifest (`[[domains]]`). `docs/SETUP.md` has a "Custom domain" section: mapping, verification, a certificate (e.g. Let's Encrypt) and switching `PUBLIC_URL`.
+
 ## [0.3.0] - 2026-11-07
 
 ### Added

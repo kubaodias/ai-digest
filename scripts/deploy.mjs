@@ -84,6 +84,15 @@ const knownUrl = env.PUBLIC_URL || state.publicUrl;
 if (knownUrl) await setSecret("PUBLIC_URL", knownUrl);
 
 // 4. build and ship
+// A custom domain in PUBLIC_URL is declared in the manifest too (Telnyx custom domains).
+const customHost = (() => {
+  try {
+    const h = new URL(env.PUBLIC_URL || state.publicUrl || "").hostname;
+    return h && !h.endsWith(".telnyxcompute.com") ? h : undefined;
+  } catch {
+    return undefined;
+  }
+})();
 const SECRETS = ["AGENT_AUTH_KEY", "DIGEST_EMAIL_FROM", "DIGEST_EMAIL_TO", "FEEDBACK_KEY", "PUBLIC_URL", ...(env.ADMIN_EMAIL || existing.has("ADMIN_EMAIL") ? ["ADMIN_EMAIL"] : [])];
 function writeBuild() {
   mkdirSync(edgeDir, { recursive: true });
@@ -106,6 +115,7 @@ function writeBuild() {
       `[telnyx]`,
       `binding = "TELNYX"`,
       ...SECRETS.flatMap((s) => [``, `[[secrets]]`, `binding = "${s}"`, `name = "${s}"`]),
+      ...(customHost ? [``, `[[domains]]`, `hostname = "${customHost}"`] : []),
       ``,
     ].join("\n"),
   );

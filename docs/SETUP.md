@@ -181,6 +181,22 @@ where `$TOKEN` is the hex HMAC-SHA256 of the text `telnyx-acp operator` keyed wi
 
 Each item ends with grey **Useful? 👍 👎** links. A click records the vote and opens a page where you can say why: one or more of "I don't use *product*", "not interested in *topics*", "already knew this" (or, on 👍, "more about *company*", "*source* is a good source"). Click a selected reason again to deselect it. Votes count only toward the digest they came from; the next issue of that digest ranks with them.
 
+## Custom domain (optional)
+
+Your function's address looks like `https://ai-digest-xxxx.telnyxcompute.com`. To use your own, e.g. `digest.example.com`:
+
+1. Map it to the function and verify it ([Telnyx custom domains](https://developers.telnyx.com/docs/edge-compute/custom-domains)):
+   ```sh
+   telnyx-edge domains add digest.example.com <function id from .edge/function.json>
+   ```
+   Publish the TXT record it prints, plus a CNAME from `digest` to your function's `…telnyxcompute.com` host, then run `telnyx-edge domains verify digest.example.com`.
+2. Upload a certificate for the name. Telnyx doesn't issue certificates for custom domains yet. A free [Let's Encrypt](https://letsencrypt.org) certificate works, e.g. obtained with certbot and your DNS provider's plugin:
+   ```sh
+   telnyx-edge domains cert upload digest.example.com --cert fullchain.pem --key privkey.pem
+   ```
+   Let's Encrypt certificates last 90 days, so renew and upload again before they expire.
+3. Set `PUBLIC_URL=https://digest.example.com` in `.env` and run `npm run deploy`. New emails, the digests page and sign-in links use the domain, and the deploy declares it in the function's manifest (`[[domains]]` in `.edge/telnyx.toml`). The `…telnyxcompute.com` address keeps working, so links in older emails do too.
+
 ## Updating
 
 ```sh
