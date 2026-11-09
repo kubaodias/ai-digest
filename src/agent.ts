@@ -366,11 +366,21 @@ export class AiDigest extends ManagedAgent {
       .sort((a, b) => b.firstSeen.localeCompare(a.firstSeen))
       .map((e) => ({ id: e.id, headline: e.headline }));
     await (this as any).setState({ poolMeta: { passRunning: { slot, startedAt: now.toISOString(), since, until, decide: opts.decide ?? true, force: opts.force ?? null } } });
-    const run = (this.agentEnv as any).AI_DIGEST.idFromName(conversation);
-    await run.prepareScoutRun({ digest: id, slot, since, until });
-    await run.receive(scoutMessage(profile!, { since, until, known }));
-    console.log(JSON.stringify({ scout: "pass started", digest: id, conversation, since, until }));
+    // The run starts on an immediate task, so the caller (an API request) doesn't wait for actor start-ups.
+    await (this as any).schedule(0, "runPass", { slot, since, until, known }, { id: `pass-${slot}` });
     return { ok: true, conversation, since, until };
+  }
+
+  /** Scheduled by startPass: hand the request to the pass's own conversation. */
+  async runPass(p: { slot: string; since: string; until: string; known: { id: string; headline: string }[] }) {
+    const id = this.poolDigest();
+    const profile = await loadProfile(this.agentEnv, id);
+    if (!profile) return;
+    const conversation = `${id}--scout-${p.slot}`;
+    const run = (this.agentEnv as any).AI_DIGEST.idFromName(conversation);
+    await run.prepareScoutRun({ digest: id, slot: p.slot, since: p.since, until: p.until });
+    await run.receive(scoutMessage(profile, { since: p.since, until: p.until, known: p.known }));
+    console.log(JSON.stringify({ scout: "pass started", digest: id, conversation, since: p.since, until: p.until }));
   }
 
   /** A scout pass's candidates (from its conversation's post-run hook): merge, score, decide. */
@@ -399,8 +409,15 @@ export class AiDigest extends ManagedAgent {
     return { added: merged.added, merged: merged.merged, decision: decision?.action ?? "skipped" };
   }
 
-  /** Write an issue from the pool now, without a scout pass (a manual run with scouting off for this run). */
+  /** Write an issue from the pool now, without a scout pass (a manual run with scouting off for this run). Queued, so the caller doesn't wait. */
   async writeNow(opts: { focus?: string } = {}) {
+    const id = this.poolDigest();
+    await (this as any).schedule(0, "runWriteNow", opts, { id: "write-now" });
+    return { ok: true, queued: true, digest: id };
+  }
+
+  /** Scheduled by writeNow. */
+  async runWriteNow(opts: { focus?: string } = {}) {
     const id = this.poolDigest();
     const profile = await loadProfile(this.agentEnv, id);
     if (!profile) return { ok: false, error: `no digest "${id}"` };
