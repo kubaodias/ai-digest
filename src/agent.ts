@@ -97,6 +97,8 @@ const poolActor = (env: ManagedEnv, digest: string) => (env as any).AI_DIGEST.id
 const DAY_MS = 24 * 3600 * 1000;
 /** A scout pass still counts as running for this long (then a new one may start). */
 const PASS_TIMEOUT_MS = 30 * 60 * 1000;
+/** After this long, a pass that hasn't delivered is checked: its reply is re-delivered, or the pass is given up. */
+const PASS_CHECK_MS = 5 * 60 * 1000;
 
 /** A digest's definition, parsed; undefined when it isn't stored (or is invalid). */
 async function loadProfile(env: ManagedEnv, id: string): Promise<DigestProfile | undefined> {
@@ -290,6 +292,21 @@ export class AiDigest extends ManagedAgent {
     await (this as any).schedule(0, "deliverToPool", { digest: run.digest, slot: run.slot, candidates: tagged, seen, dropped }, { id: "deliver", maxRetries: 8 });
   }
 
+  /**
+   * Called by the pool for a pass that never delivered (e.g. the runtime
+   * restarted before the post-run hook ran): deliver this conversation's
+   * last reply again. Returns whether there was a reply to deliver.
+   */
+  async recoverPass() {
+    const state: any = await (this as any).getState();
+    if (!state?.scoutRun) return { delivered: false, reason: "not a scout pass" };
+    const msgs = (await (this as any).messages.all()) as { role: string; content: string }[];
+    const reply = [...msgs].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content;
+    if (!reply) return { delivered: false, reason: "no reply" };
+    await this.deliverScoutReply(reply, state.scoutRun);
+    return { delivered: true };
+  }
+
   /** Scheduled by deliverScoutReply; throws on failure so the task is retried. addCandidates ignores a repeat. */
   async deliverToPool(p: { digest: string; slot: string; candidates: Candidate[]; seen?: Sighting[]; dropped: number }) {
     await poolActor(this.agentEnv, p.digest).addCandidates({ slot: p.slot, candidates: p.candidates, seen: p.seen ?? [], dropped: p.dropped });
@@ -360,9 +377,24 @@ export class AiDigest extends ManagedAgent {
     if (!scoutSettings(profile)) return { ok: false, error: `"${id}" doesn't scout: add "scout: 6h" to its definition` };
     const { entries, meta } = await this.poolState();
     const now = new Date();
-    if (meta.passRunning && now.getTime() - Date.parse(meta.passRunning.startedAt) < PASS_TIMEOUT_MS) {
-      console.log(JSON.stringify({ scout: "skipped", digest: id, reason: "a pass is running", running: meta.passRunning.slot }));
-      return { ok: false, error: "a scout pass is already running", conversation: `${id}--scout-${meta.passRunning.slot}` };
+    if (meta.passRunning) {
+      const age = now.getTime() - Date.parse(meta.passRunning.startedAt);
+      const running = `${id}--scout-${meta.passRunning.slot}`;
+      if (age < PASS_CHECK_MS) {
+        console.log(JSON.stringify({ scout: "skipped", digest: id, reason: "a pass is running", running: meta.passRunning.slot }));
+        return { ok: false, error: "a scout pass is already running", conversation: running };
+      }
+      // A pass that should have delivered by now: wait while its run is still going,
+      // else re-deliver its reply (e.g. the runtime restarted before its post-run hook), else give it up.
+      if (age < PASS_TIMEOUT_MS) {
+        if (await this.passStillRunning(running)) return { ok: false, error: "a scout pass is still running", conversation: running };
+        const r = await (this.agentEnv as any).AI_DIGEST.idFromName(running).recoverPass().catch(() => ({ delivered: false, reason: "unreachable" }));
+        if (r.delivered) {
+          console.log(JSON.stringify({ scout: "recovered", digest: id, conversation: running }));
+          return { ok: false, error: "the previous pass's reply was delivered again; start a new pass in a minute", conversation: running };
+        }
+      }
+      console.log(JSON.stringify({ scout: "gave up", digest: id, conversation: running, ageMin: Math.round(age / 60000) }));
     }
     const until = opts.until ?? now.toISOString();
     const since = opts.since ?? (meta.lastPassAt ? new Date(Date.parse(meta.lastPassAt) - 3600_000).toISOString() : new Date(Date.parse(until) - profile!.windowDays * DAY_MS).toISOString());
@@ -376,6 +408,13 @@ export class AiDigest extends ManagedAgent {
     // The run starts on an immediate task, so the caller (an API request) doesn't wait for actor start-ups.
     await (this as any).schedule(0, "runPass", { slot, since, until, known }, { id: `pass-${slot}` });
     return { ok: true, conversation, since, until };
+  }
+
+  /** Whether a pass's conversation still has a run in progress (its latest trace). */
+  private async passStillRunning(conversation: string): Promise<boolean> {
+    const t = await (this.agentEnv as any).AI_DIGEST.idFromName(conversation).traces(1).catch(() => undefined);
+    const status = t?.runs?.[0]?.status;
+    return status === "running" || status === "accepted" || status === "queued";
   }
 
   /** Scheduled by startPass: hand the request to the pass's own conversation. */
