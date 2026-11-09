@@ -13,6 +13,7 @@ It runs entirely on Telnyx: Edge Compute for hosting and durable state, Telnyx I
 ## What it does
 
 - **Digests you define.** One file per digest, e.g. `digests/agent-memory.md`, with its title, topic and audience, sources, time window, length and closing section. Your digests stay private: the folder is git-ignored and stored on your own function.
+- **Scouts on its own** when a digest has `scout: 6h`: short research passes keep a pool of candidate stories, and an issue goes out when enough strong ones have gathered, or after `max_gap` at the latest. Stories that several sources cover, or that keep coming back, rank higher.
 - **One-off digests on any topic**, on demand: `npm run digests -- ask "agent harnesses"`. A built-in General digest fills its template with your topic; no file needed.
 - **Researches** each issue with about 25 web searches and page reads, using only items from the requested window and linking to the specific articles.
 - **Illustrates** items with pictures from the source articles, only when a vision model judges them informative for that digest's reader: charts, diagrams, product screenshots.

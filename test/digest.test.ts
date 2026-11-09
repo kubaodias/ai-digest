@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { digestFromReply } from "../src/digest.ts";
+import { digestFromReply, sourceLabels } from "../src/digest.ts";
+
+test("source labels match the number of links", () => {
+  assert.equal(sourceLabels("**Source:** [A](https://a.example.com) · [B](https://b.example.com) · 2026-11-08"), "**Sources:** [A](https://a.example.com) · [B](https://b.example.com) · 2026-11-08");
+  assert.equal(sourceLabels("**Sources:** [A](https://a.example.com) · 2026-11-08"), "**Source:** [A](https://a.example.com) · 2026-11-08");
+  assert.equal(sourceLabels("**Why it matters:** see [A](https://a.example.com) and [B](https://b.example.com)"), "**Why it matters:** see [A](https://a.example.com) and [B](https://b.example.com)");
+  assert.match(digestFromReply("# T\n\n## 1. X\n**Source:** [A](https://a.example.com) · [B](https://b.example.com)")!.markdown, /\*\*Sources:\*\*/);
+});
 import { renderEmailHtml } from "../src/agent.ts";
 
 test("a reply with numbered items is a digest; subject from the title", () => {

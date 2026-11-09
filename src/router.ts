@@ -9,7 +9,9 @@
 //   GET    /v1/digests/<id>               operator token   one definition (Markdown)
 //   PUT    /v1/digests/<id>               operator token   store a definition (body: Markdown)
 //   DELETE /v1/digests/<id>               operator token   delete a definition
-//   POST   /v1/digests/<id>/runs          operator token   start a run: {"message"?, "run"?}
+//   POST   /v1/digests/<id>/runs          operator token   start a run: {"message"?, "run"?, "scout"?}
+//   GET    /v1/digests/<id>/pool          operator token   a scouting digest's pool and its last decision
+//   POST   /v1/digests/<id>/scout         operator token   a scout pass now: {"since"?, "until"?, "decide"?}
 //   POST   /v1/runs                       operator token   a one-off General digest: {"topic", "window"?, "items"?, "run"?}
 //   GET    /v1/runs/<conversation>        operator token   the conversation's recent runs
 //
@@ -25,7 +27,7 @@ import { GENERAL_TEMPLATE } from "./general.ts";
 import { app } from "./app.ts";
 import { parseRecipients } from "./config.ts";
 
-export const VERSION = "0.4.2";
+export const VERSION = "0.5.0";
 export const FEEDBACK_ACTOR = "feedback";
 export const DIGESTS_ACTOR = "digests";
 
@@ -62,6 +64,7 @@ async function appRoute(req: Request, env: RouterEnv): Promise<Response> {
         return r?.data?.text ?? null;
       },
     },
+    pool: (id) => env.AI_DIGEST.idFromName(poolOf(id)).poolView(),
     async sendEmail(to, subject, text, html) {
       if (!t || !from) throw new Error("email isn't configured (DIGEST_EMAIL_FROM)");
       // The digests actor sends it right after this request returns (an immediate scheduled call),
@@ -91,10 +94,23 @@ export function topicSlug(topic: string): string {
   return topic.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24).replace(/-+$/, "");
 }
 
+/** A digest's pool actor (continuous scouting; agent.ts). */
+const poolOf = (id: string) => `${id}--pool`;
+/** Call an actor method, turning a synchronous throw (e.g. a missing method) into a rejection. */
+const attempt = <T>(f: () => Promise<T>) => Promise.resolve().then(f);
+
+/** An ISO time from the request, or undefined; throws on a malformed one. */
+function isoParam(v: unknown, name: string): string | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  const t = typeof v === "string" ? Date.parse(v) : NaN;
+  if (Number.isNaN(t)) throw new ProfileError("request", `"${name}" must be a date or time (e.g. 2026-11-02 or 2026-11-02T06:00:00Z)`);
+  return new Date(t).toISOString();
+}
+
 /** How the built-in General digest appears in GET /v1/digests. */
 function generalSummary() {
   const p = generalProfile("{topic}");
-  return { id: GENERAL_ID, builtIn: true, title: p.title, windowDays: p.windowDays, items: p.items, schedule: null, updatedAt: null, versions: null };
+  return { id: GENERAL_ID, builtIn: true, title: p.title, windowDays: p.windowDays, items: p.items, scout: null, updatedAt: null, versions: null };
 }
 
 /**
@@ -162,14 +178,49 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
             if (err instanceof ProfileError) return json(400, { error: "invalid_digest", message: err.message });
             throw err;
           }
-          return json(200, await actor(DIGESTS_ACTOR).putDigest(id, markdown));
+          const stored = await actor(DIGESTS_ACTOR).putDigest(id, markdown);
+          // Arm, re-arm or cancel the scout timer (every deploy pushes every definition, so this also repairs a lost timer).
+          const scouting = await attempt(() => actor(poolOf(id)).poolConfigure()).catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
+          return json(200, { ...stored, scouting });
         }
-        if (method === "DELETE") return json(200, await actor(DIGESTS_ACTOR).deleteDigest(id));
+        if (method === "DELETE") {
+          const deleted = await actor(DIGESTS_ACTOR).deleteDigest(id);
+          // Its timer stops and its pool is emptied, so a digest created later under the same name starts fresh.
+          await attempt(() => actor(poolOf(id)).poolDelete()).catch(() => undefined);
+          return json(200, deleted);
+        }
+      }
+      if (id && parts[2] === "pool" && parts.length === 3 && method === "GET") {
+        const d = await actor(DIGESTS_ACTOR).getDigest(id);
+        if (!d) return json(404, { error: "not_found", message: `no digest "${id}"` });
+        return json(200, await actor(poolOf(id)).poolView());
+      }
+      if (id && parts[2] === "scout" && parts.length === 3 && method === "POST") {
+        const d = await actor(DIGESTS_ACTOR).getDigest(id);
+        if (!d) return json(404, { error: "not_found", message: `no digest "${id}"` });
+        if (!parseProfile(id, d.markdown).scout) return json(400, { error: "not_scouting", message: `"${id}" doesn't scout: add "scout: 6h" to its definition and push it` });
+        const body = await req.json().catch(() => ({}));
+        let since: string | undefined, until: string | undefined;
+        try {
+          since = isoParam(body?.since, "since");
+          until = isoParam(body?.until, "until");
+        } catch (err) {
+          return json(400, { error: "bad_request", message: (err as Error).message.replace(/^request: /, "") });
+        }
+        if (since && until && since >= until) return json(400, { error: "bad_request", message: `"since" must be before "until"` });
+        const r = await actor(poolOf(id)).startPass({ since, until, decide: body?.decide !== false });
+        return json(r.ok ? 202 : 409, { digest: id, ...r });
       }
       if (id && parts[2] === "runs" && parts.length === 3 && method === "POST") {
         const d = await actor(DIGESTS_ACTOR).getDigest(id);
         if (!d) return json(404, { error: "not_found", message: `no digest "${id}": push it first (npm run digests -- push)` });
         const body = await req.json().catch(() => ({}));
+        // A scouting digest writes from its pool: after a fresh pass (default), or right away with "scout": false.
+        if (parseProfile(id, d.markdown).scout) {
+          const focus = typeof body?.message === "string" ? body.message : undefined;
+          const r = body?.scout === false ? await actor(poolOf(id)).writeNow({ focus }) : await actor(poolOf(id)).startPass({ force: { focus } });
+          return json(r.ok ? 202 : 409, { digest: id, mode: body?.scout === false ? "from-pool" : "scout-then-write", ...r });
+        }
         const conversation = runConversation(id, runName(body?.run));
         const message = runMessage(parseProfile(id, d.markdown), typeof body?.message === "string" ? body.message : undefined);
         const accepted = await actor(conversation).receive(message);
@@ -193,6 +244,7 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
       return json(202, { digest: GENERAL_ID, topic: profile.topic, conversation, run: accepted });
     }
     if (parts[0] === "runs" && parts[1] && parts.length === 2 && method === "GET") {
+      if (!/^[a-z0-9_][a-z0-9_-]{0,160}$/.test(parts[1])) return json(400, { error: "bad_request", message: "not a conversation name: lowercase letters, digits, - and _" });
       const t = await actor(parts[1]).traces(5);
       return json(200, { conversation: parts[1], runs: Array.isArray(t?.runs) ? t.runs : [] });
     }

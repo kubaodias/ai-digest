@@ -93,7 +93,34 @@ export function stableUrl(url: string): string | undefined {
   return url;
 }
 
-/** Candidate images of an article page, best first: og/twitter image, figures with captions, then in-body images. */
+/**
+ * The same picture whatever size it's served at: no query, no size words or
+ * dimensions in the file name ("chart-medium.jpg", "chart-small.jpg",
+ * "chart-1024x576.png", "chart@2x.png" are one picture).
+ */
+export function imageKey(url: string): string {
+  const path = url.replace(/[?#].*$/, "").toLowerCase();
+  const slash = path.lastIndexOf("/");
+  const name = path
+    .slice(slash + 1)
+    .replace(/\.(jpe?g|png|webp|gif|avif)$/, "")
+    .replace(/@\dx$/, "")
+    .replace(/[-_.](\d{2,5}x\d{2,5}|w\d{2,5}|\d{2,5}w|small|medium|large|xlarge|thumb|thumbnail|full|original|scaled|hero|preview)$/, "")
+    .replace(/[-_.](\d{2,5}x\d{2,5}|small|medium|large|thumb|full|original)$/, "");
+  return path.slice(0, slash + 1) + name;
+}
+
+/** At most one picture per image key: the first (best) one stays. */
+export function distinctImages<T extends { url: string }>(images: T[]): T[] {
+  const seen = new Set<string>();
+  return images.filter((im) => {
+    const k = imageKey(im.url);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 /**
  * A raster version of an SVG when its host can render one (Gmail shows no SVG).
  * Contentful's image API turns `.svg` into PNG with `fm=png` (checked: OpenAI's
@@ -138,7 +165,7 @@ export function extractCandidates(html: string, pageUrl: string): Candidate[] {
     }
     url = rasterUrl(stableUrl(url) ?? "") ?? "";
     if (!/^https:\/\//i.test(url) || SKIP.test(url.replace(/[?#].*$/, ""))) return undefined;
-    const key = url.replace(/[?#].*$/, "");
+    const key = imageKey(url);
     if (seen.has(key)) return undefined;
     seen.add(key);
     return { url, ...c };
@@ -308,17 +335,36 @@ export async function pickImages(telnyx: TelnyxPoster, article: string, headline
         if (dim && dim.h > dim.w) throw new Error(`taller than wide (${dim.w}x${dim.h})`);
         const v = await judge(telnyx, `data:${type};base64,${base64(img.bytes)}`, headline, context, c, audience);
         log({ images: "judged", url: c.url, origin: c.origin, score: v.score, kind: v.kind });
-        return { url: c.url, caption: c.caption && c.caption.length <= 200 ? c.caption : v.caption, score: v.score, kind: v.kind };
+        return { url: c.url, caption: c.caption && c.caption.length <= 200 ? c.caption : v.caption, score: v.score, kind: v.kind, shape: dim ? (dim.w / dim.h).toFixed(2) : undefined, og: c.origin === "og" };
       } catch (err) {
         log({ images: "skipped", url: c.url, error: err instanceof Error ? err.message : String(err) });
         return undefined;
       }
     }),
   );
-  return judged
-    .filter((j): j is PickedImage => !!j && j.score >= MIN_SCORE && !!j.caption)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_IMAGES_PER_ITEM);
+  const good = judged.filter((j): j is PickedImage & { shape?: string; og?: boolean } => !!j && j.score >= MIN_SCORE && !!j.caption).sort((a, b) => b.score - a.score);
+  return distinctPicks(good).slice(0, MAX_IMAGES_PER_ITEM).map(({ shape, og, ...im }) => im);
+}
+
+/**
+ * The pictures worth showing together, best first: one per picture (size
+ * variants, or the same shape in the same folder, count as one), and the
+ * share image (og/twitter) only when the article has nothing else, since it
+ * usually repeats the article's main figure inside a branded card.
+ */
+export function distinctPicks<T extends { url: string; shape?: string; og?: boolean }>(good: T[]): T[] {
+  const own = good.filter((im) => !im.og);
+  if (own.length) good = own;
+  // The same picture at two sizes under different names: same folder, same shape.
+  const shapes = new Set<string>();
+  const distinct = good.filter((im) => {
+    if (!im.shape) return true;
+    const k = `${im.url.replace(/[?#].*$/, "").replace(/[^/]*$/, "")}|${im.shape}`;
+    if (shapes.has(k)) return false;
+    shapes.add(k);
+    return true;
+  });
+  return distinctImages(distinct);
 }
 
 // ── the digest ───────────────────────────────────────────────────────────────
@@ -400,6 +446,12 @@ export async function addImages(telnyx: TelnyxPoster, markdown: string, log: Log
     }
     return { headline: s.headline, images: [], note: s.links.length ? "nothing relevant" : "no article link" };
   });
+  // A picture shown once per issue: a later item doesn't repeat an earlier one's.
+  const used = new Set<string>();
+  for (const r of report) {
+    r.images = r.images.filter((im) => !used.has(imageKey(im.url)));
+    for (const im of r.images) used.add(imageKey(im.url));
+  }
   // Insert from the last section backwards so earlier offsets stay valid.
   let out = markdown;
   for (let i = sections.length - 1; i >= 0; i--) {
