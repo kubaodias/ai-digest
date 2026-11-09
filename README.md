@@ -116,7 +116,7 @@ About 30 minutes, most of it waiting for DNS. The full guide with links is **[do
 ```sh
 npm install
 npm test                         # node:test, no network
-npm run screenshots              # regenerate docs/images from docs/fixtures (needs Chrome)
+npm run screenshots              # regenerate docs/images from scripts/fixtures (needs Chrome)
 npm run deploy                   # tests, secrets, build, ship, push digests
 npm run release -- minor         # bump version, date the changelog, commit and tag
 ```

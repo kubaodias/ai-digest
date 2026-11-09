@@ -1,4 +1,4 @@
-// Regenerates the screenshots in docs/images from docs/fixtures/sample-digest.md.
+// Regenerates the screenshots in docs/images from scripts/fixtures/sample-digest.md.
 // Offline (no Telnyx API calls): renders the email and a feedback page on a local
 // server and photographs them with Chrome.
 //
@@ -17,7 +17,7 @@ import { computePreferences } from "../src/preferences.ts";
 
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const OUT = new URL("../docs/images/", import.meta.url).pathname;
-const md = await readFile(new URL("../docs/fixtures/sample-digest.md", import.meta.url), "utf8");
+const md = await readFile(new URL("./fixtures/sample-digest.md", import.meta.url), "utf8");
 const subject = md.split("\n")[0]!.replace(/^#\s*/, "");
 
 // Entities and tags as the tagger would give them (fixed, so the screenshots are reproducible).

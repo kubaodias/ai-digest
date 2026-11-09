@@ -14,6 +14,7 @@ Context for a coding agent working in this repository: an AI agent on Telnyx Edg
 | `examples/digests/` | Example digest definitions (committed) | you |
 | `digests/` | The deployer's own digest definitions; git-ignored | the person deploying |
 | `docs/` | Setup and design docs, screenshots (`npm run screenshots`), memory summary instructions | you |
+| `docs/spec/` | Decision records and design specs, numbered; a new decision or a feature design gets the next number | you |
 | `CHANGELOG.md` | Keep a Changelog; every change gets an entry under Unreleased | you |
 | `.env` | Local settings and keys; git-ignored. `.env.example` documents them | the person deploying |
 | `.edge/` | Build output and deploy state (function id, URL) from `npm run deploy`; git-ignored | never by hand |
