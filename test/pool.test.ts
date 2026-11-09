@@ -163,7 +163,7 @@ test("housekeep: expiry by window, stale reservations return, old sent entries f
 
 // ── the decision ──
 
-const live = (n: number, score: number) => Array.from({ length: n }, (_, k) => entry({ id: `s${score}-${k}`, score }));
+const live = (n: number, score: number) => Array.from({ length: n }, (_, k) => entry({ id: `s${score}-${k}`, score, entities: [`product ${score}-${k}`] }));
 
 test("decide: enough strong stories and the minimum gap → an issue of the strongest", () => {
   const d = decide([...live(3, 8), ...live(4, 5)], S, ago(3), NOW, 5);
@@ -274,10 +274,15 @@ test("capPerEntity: at most two candidates per product per pass, most important 
   assert.equal(r.capped, 1);
 });
 
-test("trending: three sources or three sightings", () => {
-  assert.equal(trending({ sources: [1, 2, 3].map((k) => ({ domain: `d${k}`, url: "u" })), sightings: 1 }), true);
-  assert.equal(trending({ sources: [{ domain: "a", url: "u" }], sightings: 3 }), true);
-  assert.equal(trending({ sources: [{ domain: "a", url: "u" }, { domain: "b", url: "u" }], sightings: 2 }), false);
+test("trending: three independent sources; being found again isn't wide coverage", () => {
+  assert.equal(trending({ sources: [1, 2, 3].map((k) => ({ domain: `d${k}`, url: "u" })) }), true);
+  assert.equal(trending({ sources: [{ domain: "a", url: "u" }, { domain: "b", url: "u" }] }), false);
+});
+
+test("decide: an issue has at most two stories about the same product; the rest wait", () => {
+  const pool = ["claude code", "Claude Code", "claude-code", "codex", "pi"].map((e, k) => entry({ id: `p${k}`, score: 9 - k * 0.1, entities: [e] }));
+  const d = decide(pool, S, ago(0), NOW, 10, true);
+  if (d.action !== "none") assert.deepEqual(d.ids, ["p0", "p1", "p3", "p4"]);
 });
 
 test("the scout request asks for variety and for the other outlets covering a story", () => {
@@ -286,6 +291,8 @@ test("the scout request asks for variety and for the other outlets covering a st
   assert.match(m, /at most 2 tool calls on release notes/);
   assert.match(m, /at most 2 candidates about the same product/);
   assert.match(m, /"otherSources": that's how stories everyone is talking about are recognised/);
+  assert.match(m, /not link roundups, newsletters/);
+  assert.match(m, /Set "url" to the maker's own page/);
 });
 
 test("the writer request: limited link checks, several sources per item, trending stories marked", () => {
@@ -294,6 +301,11 @@ test("the writer request: limited link checks, several sources per item, trendin
   const m = writerMessage(profile, [hot, cold], { quiet: false });
   assert.match(m, new RegExp(`fetch_page at most ${WRITER_CHECKS} times`));
   assert.match(m, /\*\*Sources:\*\* \[site\]\(url\) · \[site\]\(url\) · date/);
-  assert.match(m, /trending: covered by 4 sources, found in 2 searches/);
+  assert.match(m, /trending: covered by 4 independent sources/);
   assert.equal(m.match(/trending:/g)?.length, 1, "only the trending story is marked");
+  assert.match(m, /maker's own page first/);
+  assert.match(m, /leave out link roundups/);
+  assert.match(m, /don't call other stories widely covered/);
+  assert.match(m, /Merge stories about the same product/);
+  assert.match(m, /about: acme harness/);
 });

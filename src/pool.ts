@@ -85,7 +85,7 @@ export const MAX_PER_PASS = 15;
 export const MAX_PER_ENTITY = 2;
 /** Forced and max_gap issues leave out stories below this score, unless none reach it. */
 export const FLOOR = 5;
-/** A story counts as trending from this many independent sources or sightings. */
+/** A story counts as trending (widely covered) from this many independent sources. */
 export const TRENDING = 3;
 /** Pool headlines listed in a scout request as "known". */
 export const KNOWN_IN_REQUEST = 60;
@@ -203,9 +203,9 @@ export function capPerEntity<T extends { entities: string[] }>(candidates: T[], 
   return { kept, capped: candidates.length - kept.length };
 }
 
-/** Whether a story is trending: several independent sources, or found again and again. */
-export function trending(e: Pick<PoolEntry, "sources" | "sightings">): boolean {
-  return e.sources.length >= TRENDING || e.sightings >= TRENDING;
+/** Whether a story is trending: covered by several independent sources. Being found again only raises its score. */
+export function trending(e: Pick<PoolEntry, "sources">): boolean {
+  return e.sources.length >= TRENDING;
 }
 
 // ── merging ──────────────────────────────────────────────────────────────────
@@ -382,13 +382,14 @@ export type Decision =
  *   - at least `sendAt` strong candidates and `minGap` since the last issue;
  *   - `maxGap` since the last issue: send anyway, whatever the pool holds (it may be empty);
  *   - otherwise nothing, with the reason.
- * `ids` are the candidates to include, strongest first, at most `maxItems`.
+ * `ids` are the candidates to include, strongest first, at most `maxItems` and at most
+ * MAX_PER_ENTITY about the same product or company (the rest stay for a later issue).
  */
 export function decide(pool: PoolEntry[], s: ScoutSettings, lastIssueAt: string, now: string, maxItems: number, force = false): Decision {
   const live = pool.filter((e) => e.state === "candidate").sort((a, b) => b.score - a.score || b.sources.length - a.sources.length);
   const strong = live.filter((e) => e.score >= s.strong);
   const since = Date.parse(now) - Date.parse(lastIssueAt);
-  const pick = (list: PoolEntry[]) => list.slice(0, maxItems).map((e) => e.id);
+  const pick = (list: PoolEntry[]) => capPerEntity(list).kept.slice(0, maxItems).map((e) => e.id);
   // Worth sending at all: at least FLOOR; when nothing reaches it, the best three anyway.
   const worthy = live.filter((e) => e.score >= FLOOR);
   const anyway = worthy.length ? worthy : live.slice(0, 3);
