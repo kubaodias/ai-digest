@@ -243,6 +243,7 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
       return json(202, { digest: GENERAL_ID, topic: profile.topic, conversation, run: accepted });
     }
     if (parts[0] === "runs" && parts[1] && parts.length === 2 && method === "GET") {
+      if (!/^[a-z0-9_][a-z0-9_-]{0,160}$/.test(parts[1])) return json(400, { error: "bad_request", message: "not a conversation name: lowercase letters, digits, - and _" });
       const t = await actor(parts[1]).traces(5);
       return json(200, { conversation: parts[1], runs: Array.isArray(t?.runs) ? t.runs : [] });
     }

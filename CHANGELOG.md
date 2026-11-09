@@ -20,6 +20,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `POST /v1/digests/<id>/runs` on a scouting digest runs a pass and then writes from its pool (`"scout": false` writes from the pool right away).
 - Storing a definition (`PUT`, so every `npm run digests -- push` and deploy) arms, re-arms or cancels its scout timer; the response includes `scouting`.
 - `GET /v1/digests` returns `scout` (the settings or null) instead of `schedule`.
+- `GET /v1/runs/<conversation>` answers 400 for a name that isn't a conversation instead of passing it to an actor (which failed with a 500).
 
 ### Removed
 
