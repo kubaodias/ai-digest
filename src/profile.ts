@@ -27,7 +27,7 @@ export interface DigestProfile {
   images: boolean;
   /** Recipients overriding DIGEST_EMAIL_TO. */
   to: string[];
-  /** Watching (docs/spec/0010-continuous-scouting.md): set when the file has `watch:` (or the old name, `scout:`). */
+  /** Watching (docs/spec/0010-continuous-scouting.md): set when the file has `watch:`. */
   watch?: { watchHours: number; sendAt: number; strong: number; minGapDays: number; maxGapDays: number };
   /** What to cover, for whom, sources, what to leave out: given to the research model as written. */
   description: string;
@@ -55,7 +55,7 @@ export function isDigestId(id: string | undefined): id is string {
 /** The longest topic `ask` accepts, after cleaning. */
 export const TOPIC_MAX = 200;
 
-const KNOWN = new Set(["title", "window", "items", "closing", "images", "to", "watch", "scout", "send_at", "strong", "min_gap", "max_gap"]);
+const KNOWN = new Set(["title", "window", "items", "closing", "images", "to", "watch", "send_at", "strong", "min_gap", "max_gap"]);
 const WATCH_ONLY = ["send_at", "strong", "min_gap", "max_gap"];
 
 export class ProfileError extends Error {
@@ -78,18 +78,14 @@ function intIn(id: string, key: string, v: string, min: number, max: number, uni
   return n;
 }
 
-/** The watching settings, or undefined without `watch:` (`scout:` is its old name). The others need it. */
+/** The watching settings, or undefined without `watch:`. The others need it. */
 function parseWatch(id: string, s: Record<string, string>, items: { min: number; max: number }): DigestProfile["watch"] {
-  const off = (v: string | undefined) => v === undefined || /^(off|no|none)$/i.test(v);
-  if (!off(s.watch) && !off(s.scout)) throw new ProfileError(id, `"scout" is the old name of "watch": keep only "watch"`);
-  const key = !off(s.scout) || (s.watch === undefined && s.scout !== undefined) ? "scout" : "watch";
-  const every = s[key];
-  if (every === undefined || /^(off|no|none)$/i.test(every)) {
+  if (s.watch === undefined || /^(off|no|none)$/i.test(s.watch)) {
     const stray = WATCH_ONLY.find((k) => s[k] !== undefined);
     if (stray) throw new ProfileError(id, `"${stray}" needs "watch" (e.g. watch: 6h)`);
     return undefined;
   }
-  const watchHours = intIn(id, key, every, 1, 24, "h");
+  const watchHours = intIn(id, "watch", s.watch, 1, 24, "h");
   const sendAt = s.send_at !== undefined ? intIn(id, "send_at", s.send_at, 1, 30) : items.min;
   const strong = s.strong !== undefined ? intIn(id, "strong", s.strong, 1, 10) : 7;
   const minGapDays = s.min_gap !== undefined ? intIn(id, "min_gap", s.min_gap, 0, 30, "d") : 2;

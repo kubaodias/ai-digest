@@ -6,15 +6,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- **Scouting is now called watching.** The setting is `watch: 6h`; a pass is a **check**, run in `<digest>--check-<time>`. `POST /v1/digests/<id>/check` starts one (`npm run digests -- watch <id>`), `"check": false` on a run writes from the pool (`npm run digests -- run <id> --from-pool`), the digests page shows a "Watching" card, and responses add `watch`, `watching`, `checks`, `lastCheckAt` and so on. Nothing in /v1 changed for 0.5.0 clients: `scout:` in a definition, `/scout`, `"scout": false`, `--no-scout` and `npm run digests -- scout` still work, responses keep every 0.5.0 field in its 0.5.0 shape (`scout` with `scoutHours`, `scouting`, `passes`, `lastPassAt`, …), and `mode: "scout-then-write"` and the `not_scouting` error keep their values.
-- A pool created by 0.5.0 is carried over: its state is renamed on first use, its old timers are replaced, and a check queued or running across the upgrade still reaches the pool.
+- **Scouting is now called watching**, everywhere and without the old names: the setting is `watch: 6h` (a file with `scout:` gets an unknown-setting error); a pass is a **check**, run in `<digest>--check-<time>`; `POST /v1/digests/<id>/check` starts one (`npm run digests -- watch <id>`); `"check": false` on a run writes from the pool (`npm run digests -- run <id> --from-pool`); a run's `mode` is `check-then-write`, a digest that doesn't watch answers `not_watching`; responses have `watch`, `watching`, `checks`, `lastCheckAt`, `nextCheckAt`, `checkRunning`; the digests page shows a "Watching" card. A pool from 0.5.0 keeps its stories but not its timer or counters: replace `scout:` with `watch:` and push the definition to arm the new timer.
 - README: watching in the definition example, the commands, the diagram and the project layout.
 
 ### Fixed
 
-- A run can't be named `pool`, `check-…`, `issue-…` or `scout-…` any more (`--run`, `"run"`): those are a watching digest's own conversations, so such a run reached the pool actor or got a check's tool budget. It gets the time-based name instead.
+- A run can't be named `pool`, `check-…` or `issue-…` any more (`--run`, `"run"`): those are a watching digest's own conversations, so such a run reached the pool actor or got a check's tool budget. It gets the time-based name instead.
 - A one-off digest whose topic starts with "check" or "issue" (`ask "Check Point …"`) no longer gets a check's or an issue's web tool budget.
-- `scout: off` next to `watch: 6h` (or the other way round) is accepted; only both on is an error.
 
 ## [0.5.0] - 2026-11-09
 

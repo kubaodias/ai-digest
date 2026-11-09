@@ -2,7 +2,7 @@
 
 Status: **accepted**: phase 1 shipped in 0.5.0; phases 2 (breaking alerts) and 3 (rising subjects) are proposed.
 
-> **Renamed in 0.5.1:** the feature is called **watching**. The setting is `watch:` (`scout:` still works), a pass is a **check** (`<digest>--check-<time>`, `POST /v1/digests/<id>/check`, `npm run digests -- watch <id>`). This record keeps the names it was written with.
+> **Renamed in 0.5.1:** the feature is called **watching**. The setting is `watch:`, a pass is a **check** (`<digest>--check-<time>`, `POST /v1/digests/<id>/check`, `npm run digests -- watch <id>`). This record keeps the names it was written with.
 
 ## Summary
 

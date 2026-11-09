@@ -97,12 +97,12 @@ async function main() {
     }
     case "run": {
       const runName = flag("--run");
-      const fromPool = has("--from-pool") || has("--no-scout"); // --no-scout: the 0.5.0 name
+      const fromPool = has("--from-pool");
       const [id, ...focus] = rest;
       if (!id) fail("Usage: npm run digests -- run <id> [focus for this issue] [--run <name>] [--from-pool]");
       const r = await agentApi(env, "POST", `/v1/digests/${id}/runs`, { ...(runName ? { run: runName } : {}), ...(focus.length ? { message: focus.join(" ") } : {}), ...(fromPool ? { check: false } : {}) });
       if (r.ok === false) fail(r.error);
-      if (r.mode === "scout-then-write") console.log(`Started a check for ${r.digest} (${r.conversation}); an issue is written from the pool when it's done.`);
+      if (r.mode === "check-then-write") console.log(`Started a check for ${r.digest} (${r.conversation}); an issue is written from the pool when it's done.`);
       else if (r.mode === "from-pool") console.log(`Writing ${r.digest} from its pool now; follow it with: npm run digests -- pool ${r.digest}`);
       else console.log(`Started ${r.digest} in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
       if (r.conversation) console.log(`Follow it: npm run digests -- status ${r.conversation}`);
@@ -119,9 +119,7 @@ async function main() {
       console.log(`Follow it: npm run digests -- status ${r.conversation}`);
       return;
     }
-    case "watch":
-    case "check":
-    case "scout": { // check and scout: other names (scout was 0.5.0's)
+    case "watch": {
       const since = flag("--since");
       const until = flag("--until");
       const noSend = has("--no-send");

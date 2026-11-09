@@ -95,16 +95,6 @@ const digestsActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(DIGE
 export const poolConversation = (digest: string) => `${digest}--pool`;
 const poolActor = (env: ManagedEnv, digest: string) => (env as any).AI_DIGEST.idFromName(poolConversation(digest));
 const DAY_MS = 24 * 3600 * 1000;
-/** Watch settings as 0.5.0 returned them (`scout`, with `scoutHours`), kept in /v1 responses. */
-export function legacyScout(w: { watchHours: number; sendAt: number; strong: number; minGapDays: number; maxGapDays: number } | undefined | null) {
-  if (!w) return null;
-  const { watchHours, ...rest } = w;
-  return { scoutHours: watchHours, ...rest };
-}
-
-/** 0.5.0 (scouting) names of the pool's meta fields, and what they're called now. */
-const LEGACY_META: Record<string, string> = { lastPassAt: "lastCheckAt", lastPassSlot: "lastCheckSlot", lastPass: "lastCheck", passes: "checks", passRunning: "checkRunning", scoutHours: "watchHours" };
-
 /** A check still counts as running for this long (then a new one may start). */
 const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
 /** After this long, a check that hasn't delivered is stale: its reply is re-delivered, or the check is given up. */
@@ -351,7 +341,7 @@ export class AiDigest extends ManagedAgent {
    */
   async recoverCheck() {
     const state: any = await (this as any).getState();
-    if (!(state?.checkRun ?? state?.scoutRun)) return { delivered: false, reason: "not a check" };
+    if (!state?.checkRun) return { delivered: false, reason: "not a check" };
     const msgs = (await (this as any).messages.all()) as { role: string; content: string }[];
     const reply = [...msgs].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content;
     if (!reply) return { delivered: false, reason: "no reply" };
@@ -375,19 +365,7 @@ export class AiDigest extends ManagedAgent {
 
   private async poolState(): Promise<{ entries: PoolEntry[]; meta: any }> {
     const state: any = await (this as any).getState();
-    let meta = state?.poolMeta ?? {};
-    // A pool from 0.5.0 (scouting): its meta under the old names, moved once.
-    const old = Object.entries(LEGACY_META).filter(([from]) => from in meta);
-    if (old.length) {
-      const patch: Record<string, unknown> = {};
-      for (const [from, to] of old) {
-        if (!(to in meta)) patch[to] = meta[from];
-        patch[from] = null;
-      }
-      await (this as any).setState({ poolMeta: patch });
-      meta = Object.fromEntries(Object.entries({ ...meta, ...patch }).filter(([, v]) => v !== null));
-    }
-    return { entries: Object.values(state?.poolEntries ?? {}).filter(Boolean) as PoolEntry[], meta };
+    return { entries: Object.values(state?.poolEntries ?? {}).filter(Boolean) as PoolEntry[], meta: state?.poolMeta ?? {} };
   }
 
   /** Store the pool (only what changed) and merge `meta` into poolMeta. */
@@ -409,8 +387,6 @@ export class AiDigest extends ManagedAgent {
     const id = this.poolDigest();
     const s = watchSettings(await loadProfile(this.agentEnv, id));
     const { meta } = await this.poolState();
-    // 0.5.0's timers ("scout", "scout-first") are replaced by "watch".
-    for (const t of ["scout", "scout-first"]) await (this as any).cancelSchedule(t).catch(() => false);
     if (!s) {
       await (this as any).cancelSchedule("watch").catch(() => false);
       if (meta.enabledAt) await (this as any).setState({ poolMeta: { enabledAt: null, watchHours: null } });
@@ -432,19 +408,11 @@ export class AiDigest extends ManagedAgent {
   async poolDelete() {
     const id = this.poolDigest();
     const tasks: any[] = await (this as any).listSchedules().catch(() => []);
-    for (const t of [...tasks.map((t) => t.id), "watch", "scout", "scout-first"]) await (this as any).cancelSchedule(t).catch(() => false);
+    for (const t of [...tasks.map((t) => t.id), "watch"]) await (this as any).cancelSchedule(t).catch(() => false);
     const { entries } = await this.poolState();
     await (this as any).setState({ poolEntries: null, poolMeta: null });
     console.log(JSON.stringify({ pool: "deleted", digest: id, entries: entries.length }));
     return { digest: id, watching: false, cleared: entries.length };
-  }
-
-  /** 0.5.0 names of watchTick and runCheck, for tasks queued before an upgrade. */
-  async scoutTick() {
-    return this.watchTick();
-  }
-  async runPass(p: Parameters<AiDigest["runCheck"]>[0]) {
-    return this.runCheck(p);
   }
 
   /** The timer's tick: one check (unless one is still running), then the next tick, an interval later. */
@@ -641,13 +609,6 @@ export class AiDigest extends ManagedAgent {
     return {
       digest: id,
       watch: s ?? null,
-      // The 0.5.0 (scouting) names of the fields below, unchanged in /v1.
-      scout: legacyScout(s),
-      nextPassAt: next ? new Date(typeof next === "number" ? next : Date.parse(next)).toISOString() : null,
-      lastPassAt: meta.lastCheckAt ?? null,
-      lastPass: meta.lastCheck ?? null,
-      passes: meta.checks ?? 0,
-      passRunning: meta.checkRunning ?? null,
       nextCheckAt: next ? new Date(typeof next === "number" ? next : Date.parse(next)).toISOString() : null,
       enabledAt: meta.enabledAt ?? null,
       lastCheckAt: meta.lastCheckAt ?? null,
@@ -692,9 +653,7 @@ export class AiDigest extends ManagedAgent {
       const msgs = ((await (this as any).messages.all()) as { seq: number; role: string; content: string }[]).filter((m) => m.seq > before);
       const reply = [...msgs].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content ?? "";
       // A check: hand its candidates to the pool; never emailed.
-      // scoutRun: a check started by 0.5.0 that finished after an upgrade.
-      const checkRun = state?.checkRun ?? state?.scoutRun;
-      if (checkRun) return await this.deliverCheckReply(reply, checkRun);
+      if (state?.checkRun) return await this.deliverCheckReply(reply, state.checkRun);
       const digest = digestFromReply(reply);
       if (!digest) return; // not a digest (an answer, an error, a question): nothing to email
       const { subject, markdown } = digest;
@@ -880,7 +839,7 @@ export class AiDigest extends ManagedAgent {
         try {
           p = parseProfile(d.id, d.markdown);
         } catch {}
-        return { id: d.id, title: p?.title ?? null, windowDays: p?.windowDays ?? null, items: p?.items ?? null, watch: p?.watch ?? null, scout: legacyScout(p?.watch), updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 };
+        return { id: d.id, title: p?.title ?? null, windowDays: p?.windowDays ?? null, items: p?.items ?? null, watch: p?.watch ?? null, updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 };
       })
       .sort((a: any, b: any) => a.id.localeCompare(b.id));
   }

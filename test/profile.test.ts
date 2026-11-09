@@ -147,11 +147,5 @@ test("watching settings: defaults, ranges, and they need watch", () => {
   assert.match(err("x", file("title: x\nwatch: 6h\nstrong: 11")), /"strong" must be 1–10/);
   assert.match(err("x", file("title: x\nwatch: 6h\nmin_gap: 5d\nmax_gap: 2d")), /"max_gap" must be at least "min_gap"/);
   assert.match(err("x", file("title: x\nsend_at: 4")), /"send_at" needs "watch"/);
-  // "scout" is the 0.5.0 name: still read, and its errors name it.
-  assert.equal(parseProfile("x", file("title: x\nscout: 6h")).watch?.watchHours, 6);
-  assert.match(err("x", file("title: x\nscout: 25h")), /"scout" must be 1h–24h/);
-  assert.match(err("x", file("title: x\nwatch: 6h\nscout: 6h")), /"scout" is the old name of "watch"/);
-  assert.equal(parseProfile("x", file("title: x\nwatch: 6h\nscout: off")).watch?.watchHours, 6, "an old line that's off doesn't conflict");
-  assert.equal(parseProfile("x", file("title: x\nwatch: off\nscout: 12h")).watch?.watchHours, 12);
-  assert.equal(parseProfile("x", file("title: x\nwatch: off\nscout: off")).watch, undefined);
+  assert.match(err("x", file("title: x\nscout: 6h")), /scout/, "the old name is an unknown setting");
 });

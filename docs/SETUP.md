@@ -172,7 +172,7 @@ Sign-in links and sessions are signed with keys derived from `AGENT_AUTH_KEY`, s
 
 ## 9. Let a digest watch its topic
 
-Add `watch:` to a digest and it checks for new stories at a fixed interval, keeps them in a pool, and sends an issue when enough strong ones have gathered, or after `max_gap` at the latest, whatever the pool holds ([design](spec/0010-continuous-scouting.md); it was called scouting in 0.5.0, and `scout:` still works):
+Add `watch:` to a digest and it checks for new stories at a fixed interval, keeps them in a pool, and sends an issue when enough strong ones have gathered, or after `max_gap` at the latest, whatever the pool holds ([design](spec/0010-continuous-scouting.md), where it's called scouting):
 
 ```yaml
 watch: 6h          # a short check for new stories every 6 hours (1h–24h)

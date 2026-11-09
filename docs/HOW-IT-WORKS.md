@@ -29,7 +29,7 @@ The agent class extends the managed agent loop from `@telnyx/acp` (harness, tool
 | `DELETE /v1/digests/<id>` | operator token | Delete a definition (its issues, votes and memory stay) |
 | `POST /v1/digests/<id>/runs` | operator token | Start an issue: `{"message"?: "focus for this issue", "run"?: "name"}` → `202 {"conversation": …}`. A watching digest runs a check, then writes from its pool (`"check": false`: from the pool now) |
 | `GET /v1/digests/<id>/pool` | operator token | A watching digest's pool: timing, counts, the last decision, the candidates |
-| `POST /v1/digests/<id>/check` | operator token | A check now: `{"since"?, "until"?, "decide"?: false}` → `202 {"conversation": …}`. `/scout` and `"scout": false` (0.5.0's names) still work |
+| `POST /v1/digests/<id>/check` | operator token | A check now: `{"since"?, "until"?, "decide"?: false}` → `202 {"conversation": …}` |
 | `POST /v1/runs` | operator token | A one-off General digest: `{"topic": "…", "window"?: "14d", "items"?: "5-8", "run"?: "name"}` → `202 {"conversation": "__general--…"}` |
 | `GET /v1/runs/<conversation>` | operator token | The conversation's recent runs: `{"runs": [{status, durationMs, toolCalls, tokens, …}]}` |
 | `GET /v1/app`, `/v1/app/digests/<id>` | session cookie | The digests page (read-only) |
