@@ -110,6 +110,8 @@ test("run names: the caller's if safe, else the current time", () => {
   assert.equal(runName("w45"), "w45");
   assert.equal(runName("a--b", new Date("2026-11-07T21:55:00Z")), "2026-11-07t2155");
   assert.equal(runName(undefined, new Date("2026-11-07T21:55:00Z")), "2026-11-07t2155");
+  for (const reserved of ["pool", "check-1", "issue-x", "scout-2"]) assert.equal(runName(reserved, new Date("2026-11-07T21:55:00Z")), "2026-11-07t2155", `"${reserved}" is a watching digest's own conversation`);
+  assert.equal(runName("pools"), "pools");
 });
 
 test("unknown paths are 404 with a hint", async () => {

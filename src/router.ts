@@ -82,9 +82,15 @@ const json = (status: number, body: unknown) =>
 const png = (b64: string) =>
   new Response(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { headers: { "content-type": "image/png", "cache-control": "public, max-age=2592000" } });
 
+/**
+ * Conversation names a watching digest uses itself ("<id>--pool", "<id>--check-…", "<id>--issue-…"; "scout-" in 0.5.0):
+ * a run named like one would reach the pool actor or get a check's tool budget.
+ */
+const RESERVED_RUN = /^(pool$|check-|issue-|scout-)/;
+
 /** A run name: the caller's, or the current UTC time (e.g. 2026-11-07t2155), after `prefix` when given. */
 export function runName(given: unknown, now = new Date(), prefix = ""): string {
-  if (typeof given === "string" && /^[a-z0-9][a-z0-9-]{0,40}$/.test(given) && !given.includes("--")) return given;
+  if (typeof given === "string" && /^[a-z0-9][a-z0-9-]{0,40}$/.test(given) && !given.includes("--") && !RESERVED_RUN.test(given)) return given;
   const time = now.toISOString().slice(0, 16).replace(/[:]/g, "").toLowerCase();
   return prefix ? `${prefix}-${time}` : time;
 }

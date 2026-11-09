@@ -97,8 +97,8 @@ const poolActor = (env: ManagedEnv, digest: string) => (env as any).AI_DIGEST.id
 const DAY_MS = 24 * 3600 * 1000;
 /** A check still counts as running for this long (then a new one may start). */
 const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
-/** After this long, a check that hasn't delivered is checked: its reply is re-delivered, or the check is given up. */
-const CHECK_POLL_MS = 5 * 60 * 1000;
+/** After this long, a check that hasn't delivered is stale: its reply is re-delivered, or the check is given up. */
+const CHECK_STALE_MS = 5 * 60 * 1000;
 /**
  * Timers are spread out so checks of different digests rarely run at the same
  * time (the runtime has crashed under several parallel checks): the first check
@@ -443,7 +443,7 @@ export class AiDigest extends ManagedAgent {
     if (meta.checkRunning) {
       const age = now.getTime() - Date.parse(meta.checkRunning.startedAt);
       const running = `${id}--check-${meta.checkRunning.slot}`;
-      if (age < CHECK_POLL_MS) {
+      if (age < CHECK_STALE_MS) {
         console.log(JSON.stringify({ watch: "skipped", digest: id, reason: "a check is running", running: meta.checkRunning.slot }));
         return { ok: false, error: "a check is already running", conversation: running };
       }
