@@ -6,7 +6,25 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- **One-off digests on any topic:** `npm run digests -- ask "<topic>" [--window 14d] [--items 5-8] [--run name]`, or `POST /v1/runs {"topic", "window"?, "items"?, "run"?}`. They run the built-in **General** digest (id `__general`), a template in `src/general.ts` whose `{topic}` is filled in after parsing, in the title and description only. The topic is cleaned to one line of at most 200 characters, so it can't add settings or recipients. Each run has its own conversation (`__general--<topic>-<time>`) holding its topic, and is emailed to `DIGEST_EMAIL_TO` like any digest.
+- General has its own votes, preferences and Agent Memory profile (`__general`); its issues and votes carry their topic, and its memory sentences name it. The id starts with `_`, which digest ids can't, so it never clashes with a stored digest: `PUT`/`DELETE`/`…/runs` on `/v1/digests/__general` answer `400 built_in`, `GET` shows the template, and `GET /v1/digests` lists it last with `"builtIn": true`.
+- **Shared between digests:** `reader_preferences` returns a `shared` section computed from the vote log. One-off runs read the explicit "I don't use X" and "More about X" reasons from every other digest; regular digests read only "I don't use X" from General issues. Bare thumbs, topics and "already knew" never cross; the newest vote per product wins, a digest's own preference wins over a shared one, a one-off's own topic is never hidden, and names are matched loosely. Nothing is written twice.
+- The digests page has a **General** card and page (how to ask, the template, recent one-off issues, what it learned, its memory).
 - Custom domains: when `PUBLIC_URL` is a custom domain, `npm run deploy` declares it in the function's manifest (`[[domains]]`). `docs/SETUP.md` has a "Custom domain" section: mapping, verification, a certificate (e.g. Let's Encrypt) and switching `PUBLIC_URL`.
+
+### Changed
+
+- The research instructions describe the `shared` section: it refines choices within a digest's scope and never widens or narrows it.
+- The Agent Memory summary instructions (`docs/memory-summary-instructions.md`) no longer have a Sources section and keep a one-off topic in its bullet's evidence; `npm run deploy` applies them.
+- A run's or file's `window` also accepts plain days (`14` as well as `14d`).
+
+### Fixed
+
+- A conversation whose digest id wasn't in the stored-digest format was treated as `ai-swe` when emailing and reading preferences (`profileIdOf`); General runs are recognised.
+
+### Removed
+
+- The "good source" reason on 👍 and source preferences altogether (`sources` in `reader_preferences`, the Sources row on the digests page). Older votes that ticked a source reason count as if it weren't there; a vote whose only reason was one counts for nothing. Its old reason links are refused.
 
 ## [0.3.0] - 2026-11-07
 

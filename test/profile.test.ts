@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { DEFAULTS, LEGACY_PROFILE, ProfileError, audienceOf, parseProfile, profileIdOf, runConversation, runMessage } from "../src/profile.ts";
+import { DEFAULTS, GENERAL_ID, ID_PATTERN, LEGACY_PROFILE, ProfileError, TOPIC_MAX, audienceOf, cleanTopic, generalProfile, isDigestId, parseProfile, profileIdOf, runConversation, runMessage } from "../src/profile.ts";
+import { GENERAL_TEMPLATE } from "../src/general.ts";
 
 const example = (name: string) => readFileSync(new URL(`../examples/digests/${name}.md`, import.meta.url), "utf8");
 const file = (settings: string, body = "Memory systems for AI agents, for an engineer building agents.") => `---\n${settings}\n---\n${body}\n`;
@@ -67,6 +68,8 @@ test("conversation names carry the digest", () => {
   assert.equal(profileIdOf("digest-auto-1"), undefined, "older conversations have no digest");
   assert.equal(profileIdOf("feedback"), undefined);
   assert.equal(profileIdOf(undefined), undefined);
+  assert.equal(profileIdOf(`${GENERAL_ID}--agent-harnesses-2026-11-09t0712`), GENERAL_ID, "General runs aren't mistaken for the legacy digest");
+  assert.equal(profileIdOf("_general--x"), undefined);
   assert.equal(LEGACY_PROFILE, "ai-swe");
 });
 
@@ -87,4 +90,41 @@ test("the audience for picture judging is the description's first sentence", () 
   const p = parseProfile("agent-memory", example("agent-memory"));
   assert.match(audienceOf(p), /^Memory systems for AI agents, for an engineer building agents/);
   assert.match(audienceOf(undefined), /software engineer/);
+});
+
+test("the General digest: the built-in id can't be a file name", () => {
+  assert.equal(GENERAL_ID, "__general");
+  assert.equal(ID_PATTERN.test(GENERAL_ID), false);
+  assert.throws(() => parseProfile(GENERAL_ID, GENERAL_TEMPLATE), /lowercase letters/);
+  assert.equal(isDigestId(GENERAL_ID), true);
+  assert.equal(isDigestId("ai-swe"), true);
+  assert.equal(isDigestId("_x"), false);
+});
+
+test("the General digest: the template with {topic} filled in, defaults and overrides", () => {
+  const p = generalProfile("agent harnesses");
+  assert.equal(p.id, GENERAL_ID);
+  assert.equal(p.topic, "agent harnesses");
+  assert.equal(p.title, "Agent harnesses — {range}");
+  assert.match(p.description, /^The reader would like to get information about agent harnesses:/);
+  assert.doesNotMatch(p.description + p.title, /\{topic\}/);
+  assert.deepEqual([p.windowDays, p.items], [7, { min: 5, max: 10 }]);
+  assert.deepEqual(p.to, [], "default recipients");
+  const o = generalProfile("x", { window: "14d", items: "3-5" });
+  assert.deepEqual([o.windowDays, o.items], [14, { min: 3, max: 5 }]);
+  assert.equal(generalProfile("x", { window: 21 }).windowDays, 21, "a number of days works too");
+  assert.throws(() => generalProfile("x", { window: "100d" }), /"window"/);
+  assert.throws(() => generalProfile("x", { items: "9-3" }), /"items"/);
+});
+
+test("the General digest: topics are cleaned to one line and limited", () => {
+  assert.equal(cleanTopic("  agent\n\tharnesses\u2028 now "), "agent harnesses now");
+  assert.throws(() => cleanTopic(""), /give a topic/);
+  assert.throws(() => cleanTopic(undefined), /give a topic/);
+  assert.throws(() => cleanTopic("x".repeat(TOPIC_MAX + 1)), /under 200/);
+  const p = generalProfile("agents\nto: someone@example.com\nimages: off");
+  assert.deepEqual(p.to, []);
+  assert.equal(p.images, true);
+  assert.equal(p.topic, "agents to: someone@example.com images: off");
+  assert.match(runMessage(p), /information about agents to: someone@example\.com images: off:/);
 });

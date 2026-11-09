@@ -143,3 +143,46 @@ test("read-only, sign-out, not configured", async () => {
   assert.match(out.headers.get("set-cookie")!, /Max-Age=0/);
   assert.equal((await app(get("/v1/app"), { ...d, authKey: undefined })).status, 503);
 });
+
+test("the overview always shows the built-in General card, with recent one-off topics", async () => {
+  const general = { id: "20261109-abcd", profile: "__general", topic: "agent harnesses", subject: "Agent harnesses — 2–9 November 2026", sentAt: "2026-11-09T08:00:00Z", items: 6 };
+  const { d } = deps({
+    feedback: { ...deps().d.feedback, appOverview: async () => ({ issues: [general], votes: { __general: 3 } }) },
+    memory: { counts: async () => ({ __general: 2 }), summary: async () => null },
+  });
+  const html = await (await app(get("/v1/app", await sessionFor()), d)).text();
+  assert.match(html, /href="\/v1\/app\/digests\/__general"/);
+  assert.match(html, /built in · on demand/);
+  assert.match(html, /Recent: agent harnesses/);
+  assert.match(html, /3 votes · 2 memories/);
+  const none = deps({ digests: { ...deps().d.digests, listDigests: async () => [] } }).d;
+  const empty = await (await app(get("/v1/app", await sessionFor()), none)).text();
+  assert.match(empty, /No digests of your own yet/);
+  assert.match(empty, /General/, "the General card shows even with no stored digests");
+});
+
+test("the General page: how to ask, the template, its issues, what it learned, its memory profile", async () => {
+  const general = { id: "20261109-abcd", profile: "__general", topic: "agent harnesses", subject: "Agent harnesses — 2–9 November 2026", sentAt: "2026-11-09T08:00:00Z", items: 6 };
+  const asked: string[] = [];
+  const { d } = deps({
+    digests: { ...deps().d.digests, getDigest: async (id) => (asked.push(id), null) },
+    feedback: { appOverview: async () => ({ issues: [general], votes: { __general: 1 } }), feedbackStats: async (p) => (asked.push(`stats:${p}`), deps().d.feedback.feedbackStats(p)) },
+  });
+  const r = await app(get("/v1/app/digests/__general", await sessionFor()), d);
+  assert.equal(r.status, 200);
+  const html = await r.text();
+  assert.match(html, /<h1>General<\/h1>/);
+  assert.match(html, /npm run digests -- ask/);
+  assert.match(html, /would like to get information about \{topic\}/, "the template");
+  assert.match(html, /Agent harnesses — 2–9 November 2026/);
+  assert.match(html, /profile __general/);
+  assert.doesNotMatch(html, /Sources/);
+  assert.deepEqual(asked, ["stats:__general"], "no stored definition is looked up");
+  assert.equal((await app(get("/v1/app/digests/_general", await sessionFor()), d)).status, 404);
+});
+
+test("a digest's page no longer lists sources", async () => {
+  const { d } = deps();
+  const html = await (await app(get("/v1/app/digests/agent-memory", await sessionFor()), d)).text();
+  assert.doesNotMatch(html, /<td>Sources<\/td>/);
+});

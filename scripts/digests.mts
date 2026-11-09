@@ -1,11 +1,13 @@
 // npm run digests -- <command>
 //
-//   list                         digests stored on the agent
+//   list                         digests stored on the agent, and the built-in General one
 //   push [id…]                   upload digests/<id>.md (all when no ids), validated first
 //   pull [id…]                   download definitions into digests/
 //   show <id>                    print a stored definition
 //   delete <id>                  delete a stored definition (sent issues, votes and memory stay)
 //   run <id> [focus…] [--run N]  start a digest now; [focus] adds one-off guidance for this issue
+//   ask <topic…> [--window 14d] [--items 5-8] [--run N]
+//                                a one-off General digest on any topic, emailed to DIGEST_EMAIL_TO
 //   status <conversation>        a run's recent steps
 //
 // Talks to the agent's v1 API with the operator token (AGENT_AUTH_KEY in .env).
@@ -37,6 +39,10 @@ async function main() {
       const list = await agentApi(env, "GET", "/v1/digests");
       if (!list.length) return console.log("No digests stored yet. Add one to digests/ and run: npm run digests -- push");
       for (const d of list) {
+        if (d.builtIn) {
+          console.log(`${d.id.padEnd(22)} ${"General: any topic, on demand (ask)".padEnd(48)} ${String(d.windowDays).padStart(2)}d  ${`${d.items.min}-${d.items.max} items`.padEnd(11)} built in`);
+          continue;
+        }
         const items = d.items ? `${d.items.min}-${d.items.max} items` : "";
         console.log(`${d.id.padEnd(22)} ${(d.title ?? "(invalid)").padEnd(48)} ${String(d.windowDays ?? "?").padStart(2)}d  ${items.padEnd(11)} ${d.schedule ?? ""}`);
       }
@@ -85,6 +91,17 @@ async function main() {
       if (!id) fail("Usage: npm run digests -- run <id> [focus for this issue] [--run <name>]");
       const r = await agentApi(env, "POST", `/v1/digests/${id}/runs`, { ...(runName ? { run: runName } : {}), ...(focus.length ? { message: focus.join(" ") } : {}) });
       console.log(`Started ${r.digest} in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
+      console.log(`Follow it: npm run digests -- status ${r.conversation}`);
+      return;
+    }
+    case "ask": {
+      const runName = flag("--run");
+      const window = flag("--window");
+      const items = flag("--items");
+      const topic = rest.join(" ").trim();
+      if (!topic) fail('Usage: npm run digests -- ask "<topic>" [--window 14d] [--items 5-8] [--run <name>]');
+      const r = await agentApi(env, "POST", "/v1/runs", { topic, ...(window ? { window } : {}), ...(items ? { items } : {}), ...(runName ? { run: runName } : {}) });
+      console.log(`Started a General digest on "${r.topic}" in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
       console.log(`Follow it: npm run digests -- status ${r.conversation}`);
       return;
     }

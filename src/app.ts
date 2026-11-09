@@ -4,7 +4,7 @@
 // key signs everyone out.
 //
 //   GET  /v1/app                  your digests          (session)
-//   GET  /v1/app/digests/<id>     one digest            (session)
+//   GET  /v1/app/digests/<id>     one digest            (session; __general is the built-in General digest)
 //   GET  /v1/app/sign-in          the sign-in page
 //   POST /v1/app/sign-in          email a sign-in link   (rate-limited)
 //   GET  /v1/app/auth?t=…         use a sign-in link     (15 minutes, once)
@@ -13,7 +13,8 @@
 import { marked } from "marked";
 import { esc, errorPage, page, viewLink } from "./feedback.ts";
 import type { Preferences } from "./preferences.ts";
-import { ID_PATTERN, parseProfile, type DigestProfile } from "./profile.ts";
+import { GENERAL_ID, generalProfile, isDigestId, parseProfile, type DigestProfile } from "./profile.ts";
+import { GENERAL_TEMPLATE } from "./general.ts";
 
 export const SESSION_COOKIE = "aid_session";
 export const SESSION_DAYS = 30;
@@ -90,6 +91,8 @@ export interface DigestSummary {
 export interface IssueSummary {
   id: string;
   profile: string;
+  /** For General (one-off) issues: the topic. */
+  topic?: string;
   subject: string;
   sentAt: string;
   items: number;
@@ -146,10 +149,21 @@ export function checkInboxPage(address: string): Response {
   return page("Check your inbox", `<div class="card"><h2>Check your inbox</h2><p class="muted">A sign-in link is on its way to ${esc(maskEmail(address))}. It works once, for ${MAGIC_MINUTES} minutes.</p></div>`, 200, { css });
 }
 
+/** The built-in General digest's card: one-off topics, asked for with `npm run digests -- ask`. */
+function generalCard(overview: Overview, memory: Record<string, number>): string {
+  const mine = overview.issues.filter((i) => i.profile === GENERAL_ID);
+  const topics = [...new Set(mine.map((i) => i.topic).filter(Boolean))].slice(0, 3) as string[];
+  return `<a class="card" href="${APP}/digests/${GENERAL_ID}" style="text-decoration:none;color:inherit">
+  <span class="id">built in · on demand</span>
+  <h2>General</h2>
+  <span class="muted" style="font-size:14px">${topics.length ? `Recent: ${topics.map(esc).join(", ")}` : `Any topic: <code>npm run digests -- ask "…"</code>`}</span>
+  <span class="faint">${mine[0] ? `Last issue ${date(mine[0].sentAt)} · ${plural(mine.length, "issue")}` : "No issues yet"}</span>
+  <span class="faint">${plural(overview.votes[GENERAL_ID] ?? 0, "vote")} · ${plural(memory[GENERAL_ID] ?? 0, "memory", "memories")}</span>
+</a>`;
+}
+
 export function listPage(digests: DigestSummary[], overview: Overview, memory: Record<string, number>): Response {
-  if (!digests.length) {
-    return page("Your digests", chrome(`<div class="card"><p class="muted">No digests stored yet. Add a file to <code>digests/</code> and run <code>npm run digests -- push</code>.</p></div>`), 200, { css, wide: true });
-  }
+  const empty = digests.length ? "" : `<div class="card"><p class="muted">No digests of your own yet. Add a file to <code>digests/</code> and run <code>npm run digests -- push</code>.</p></div>`;
   const cards = digests
     .map((d) => {
       const last = overview.issues.find((i) => i.profile === d.id);
@@ -163,7 +177,7 @@ export function listPage(digests: DigestSummary[], overview: Overview, memory: R
 </a>`;
     })
     .join("");
-  return page("Your digests", chrome(`<div class="grid">${cards}</div>`), 200, { css, wide: true });
+  return page("Your digests", chrome(`${empty}<div class="grid">${cards}${generalCard(overview, memory)}</div>`), 200, { css, wide: true });
 }
 
 export interface DigestPageData {
@@ -199,10 +213,50 @@ ${p ? `<div class="card"><p class="label">What it covers</p><div class="desc">${
 <div class="card"><p class="label">Learned from your votes · ${d.prefs.votes} vote${d.prefs.votes === 1 ? "" : "s"}</p>
 <table class="kv"><tr><td>Products &amp; companies</td><td>${pref(d.prefs.entities)}</td></tr>
 <tr><td>Topics</td><td>${pref(d.prefs.topics)}</td></tr>
-<tr><td>Not enough votes yet</td><td>${pref(d.prefs.tentativeTopics)}</td></tr>
-<tr><td>Sources</td><td>${pref(d.prefs.sources)}</td></tr></table></div>
+<tr><td>Not enough votes yet</td><td>${pref(d.prefs.tentativeTopics)}</td></tr></table></div>
 <div class="card"><p class="label">Agent Memory · profile ${esc(d.digest.id)} · ${d.memoryCount} entr${d.memoryCount === 1 ? "y" : "ies"}</p>
 ${d.memorySummary ? `<div class="memory">${marked.parse(d.memorySummary, { async: false }) as string}</div>` : `<p class="faint">${d.memoryCount ? "The summary is being built; reload in a minute." : "Nothing yet: it fills in as you vote on this digest's issues."}</p>`}</div>`,
+    200,
+    { css, wide: true },
+  );
+}
+
+export interface GeneralPageData {
+  issues: { issue: IssueSummary; view?: string }[];
+  prefs: Preferences;
+  memorySummary: string | null;
+  memoryCount: number;
+}
+
+/** The built-in General digest: how to ask, its template, its one-off issues and what it learned. */
+export function generalPage(d: GeneralPageData): Response {
+  const p = generalProfile("{topic}");
+  const pref = (list: { name: string; direction: string; votes: number }[]) =>
+    list.length ? list.map((x) => `<span class="pill ${x.direction}">${x.direction === "more" ? "↑" : "↓"} ${esc(x.name)} · ${x.votes}</span>`).join("") : `<span class="faint">none yet</span>`;
+  const issues = d.issues.length
+    ? `<table class="kv">${d.issues.map(({ issue, view }) => `<tr><td>${date(issue.sentAt)}</td><td>${view ? `<a href="${esc(view)}">${esc(issue.subject)}</a>` : esc(issue.subject)} <span class="faint">· ${issue.items} items</span></td></tr>`).join("")}</table>`
+    : `<p class="faint">No one-off digests yet. Ask for one: <code>npm run digests -- ask "agent harnesses"</code></p>`;
+  const rows: [string, string][] = [
+    ["Start one", `<code>npm run digests -- ask "&lt;topic&gt;" [--window 14d] [--items 5-8]</code>`],
+    ["Title", esc(p.title)],
+    ["Time window", `${p.windowDays} days, unless the request says otherwise`],
+    ["Items", `${p.items.min}–${p.items.max}, unless the request says otherwise`],
+    ["Recipients", "default (DIGEST_EMAIL_TO)"],
+  ];
+  return page(
+    "General",
+    `<div class="top"><h1>General</h1><a class="faint" href="${APP}">All digests</a></div>
+<div class="card"><p class="label">Built in · on demand <span class="id">· ${GENERAL_ID}</span></p>
+<table class="kv">${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</table>
+<details><summary>Template</summary><pre>${esc(GENERAL_TEMPLATE)}</pre></details></div>
+<div class="card"><p class="label">Recent issues</p>${issues}</div>
+<div class="card"><p class="label">Learned from your votes · ${d.prefs.votes} vote${d.prefs.votes === 1 ? "" : "s"}</p>
+<table class="kv"><tr><td>Products &amp; companies</td><td>${pref(d.prefs.entities)}</td></tr>
+<tr><td>Topics</td><td>${pref(d.prefs.topics)}</td></tr>
+<tr><td>Not enough votes yet</td><td>${pref(d.prefs.tentativeTopics)}</td></tr></table>
+<p class="faint">Your other digests read only the products and companies you marked "I don't use" here.</p></div>
+<div class="card"><p class="label">Agent Memory · profile ${GENERAL_ID} · ${d.memoryCount} entr${d.memoryCount === 1 ? "y" : "ies"}</p>
+${d.memorySummary ? `<div class="memory">${marked.parse(d.memorySummary, { async: false }) as string}</div>` : `<p class="faint">${d.memoryCount ? "The summary is being built; reload in a minute." : "Nothing yet: it fills in as you vote on one-off issues."}</p>`}</div>`,
     200,
     { css, wide: true },
   );
@@ -269,10 +323,10 @@ export async function app(req: Request, deps: AppDeps): Promise<Response> {
     return listPage(digests, overview, memory);
   }
   const m = path.match(/^\/v1\/app\/digests\/([^/]+)$/);
-  if (m && ID_PATTERN.test(m[1]!)) {
+  if (m && isDigestId(m[1])) {
     const id = m[1]!;
-    const digest = await deps.digests.getDigest(id);
-    if (!digest) return errorPage(404, `There's no digest "${id}".`);
+    const digest = id === GENERAL_ID ? null : await deps.digests.getDigest(id);
+    if (!digest && id !== GENERAL_ID) return errorPage(404, `There's no digest "${id}".`);
     const [overview, prefs, counts, memorySummary] = await Promise.all([
       deps.feedback.appOverview(),
       deps.feedback.feedbackStats(id),
@@ -283,6 +337,7 @@ export async function app(req: Request, deps: AppDeps): Promise<Response> {
     const issues = await Promise.all(
       overview.issues.filter((i) => i.profile === id).slice(0, 12).map(async (issue) => ({ issue, view: deps.feedbackKey ? await viewLink(deps.feedbackKey, base, issue.id) : undefined })),
     );
+    if (!digest) return generalPage({ issues, prefs, memorySummary, memoryCount: counts[id] ?? 0 });
     return digestPage({ digest, issues, prefs, memorySummary, memoryCount: counts[id] ?? 0 });
   }
   return errorPage(404, "That page doesn't exist.");

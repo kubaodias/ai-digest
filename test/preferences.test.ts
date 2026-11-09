@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computePreferences, memorySentence, reasonLabel, selectionsOf, toggleSelection, validReason, type VoteLike } from "../src/preferences.ts";
+import { computePreferences, memorySentence, normalizeName, reasonLabel, selectionsOf, sharedEntityPrefs, toggleSelection, validReason, type VoteLike } from "../src/preferences.ts";
+import { GENERAL_ID } from "../src/profile.ts";
 
 const postman: VoteLike = {
   vote: "down",
@@ -18,7 +19,7 @@ test("the Postman case: 👎 with 'I don't use Postman' applies to Postman only,
   assert.equal(p.entities[0]!.direction, "less");
   assert.deepEqual(p.topics, []);
   assert.deepEqual(p.tentativeTopics, []);
-  assert.deepEqual(p.sources, []);
+  assert.equal("sources" in p, false, "sources aren't learned since 0.4.0");
 });
 
 test("one 👎 without a reason: counts against the main entity only, topics stay tentative", () => {
@@ -60,11 +61,12 @@ test("'already knew this' changes no preference", () => {
   assert.deepEqual(p.alreadyKnown, [postman.headline]);
 });
 
-test("a source reason applies to the source domain only", () => {
-  const p = computePreferences([{ ...postman, reason: "source", source: "stocktitan.net" }]);
-  assert.deepEqual(names(p.sources), ["stocktitan.net"]);
-  assert.deepEqual(p.entities, []);
+test("an old vote whose only reason was a source counts for nothing (not as an unexplained vote)", () => {
+  const p = computePreferences([{ ...postman, reason: "source", source: "stocktitan.net" }, { ...postman, headline: "b", reasons: [{ r: "source" }] }]);
+  assert.deepEqual(p.entities, [], "not 0.7 toward Postman as a bare 👎 would be");
   assert.deepEqual(p.topics, []);
+  assert.deepEqual(p.tentativeTopics, []);
+  assert.deepEqual(selectionsOf({ reasons: [{ r: "source" }, { r: "topic" }] }), [{ r: "topic" }], "retired reasons are dropped");
 });
 
 test("opposite votes on the same topic cancel out", () => {
@@ -112,8 +114,8 @@ test("'I don't use Postman' and 'I don't use Codex' together: both entities, sti
 });
 
 test("'already knew this' with another reason: the other reason still applies", () => {
-  const p = computePreferences([{ ...postman, reasons: [{ r: "known" }, { r: "source" }] }]);
-  assert.deepEqual(names(p.sources), ["github.com"]);
+  const p = computePreferences([{ ...postman, reasons: [{ r: "known" }, { r: "entity", target: "postman" }] }]);
+  assert.deepEqual(names(p.entities), ["postman"]);
   assert.deepEqual(p.alreadyKnown, [postman.headline]);
 });
 
@@ -142,7 +144,8 @@ test("memory gets one sentence per selected reason", () => {
 test("reasons are validated per direction", () => {
   assert.ok(validReason("down", "known"));
   assert.ok(!validReason("down", "source"), "no 'weak source' option");
-  assert.ok(validReason("up", "source"));
+  assert.ok(!validReason("up", "source"), "no 'good source' option since 0.4.0");
+  assert.ok(validReason("up", "entity"));
   assert.ok(!validReason("up", "known"));
   assert.ok(validReason("up", "topic"));
   assert.ok(!validReason("down", "bogus"));
@@ -158,15 +161,75 @@ test("memory sentences say where the vote applies", () => {
   assert.doesNotMatch(entity, /security|dev tooling/);
   assert.match(memorySentence({ ...postman, reason: "topic" }), /not interested in security, dev tooling/);
   assert.match(memorySentence({ ...postman, reason: "known" }), /already knew/);
-  assert.match(memorySentence({ ...postman, reason: "source" }), /github\.com a weak source/);
+  assert.doesNotMatch(memorySentence({ ...postman, reasons: [{ r: "source" }, { r: "topic" }] }), /source/, "retired source reasons write nothing");
   assert.match(memorySentence(postman), /don't assume I dislike its topics/);
   assert.match(memorySentence({ ...postman, vote: "up", reason: "entity", target: "postman" }), /more news about Postman\b/);
   assert.match(memorySentence({ ...postman, entities: [], reason: "entity" }), /the product or company in "Postman's/);
 });
 
-test("reason labels name the entity, topics and source", () => {
-  assert.equal(reasonLabel("down", "entity", ["postman"], ["security"], "github.com"), "I don't use Postman");
-  assert.equal(reasonLabel("down", "topic", ["postman"], ["security", "dev tooling"], "github.com"), "Not interested in security, dev tooling");
-  assert.equal(reasonLabel("up", "source", [], [], "go.dev"), "go.dev is a good source");
-  assert.equal(reasonLabel("down", "entity", [], [], ""), "I don't use this product or company");
+test("reason labels name the entity and topics", () => {
+  assert.equal(reasonLabel("down", "entity", ["postman"], ["security"]), "I don't use Postman");
+  assert.equal(reasonLabel("down", "topic", ["postman"], ["security", "dev tooling"]), "Not interested in security, dev tooling");
+  assert.equal(reasonLabel("up", "entity", ["mem0"], []), "More about Mem0");
+  assert.equal(reasonLabel("down", "entity", [], []), "I don't use this product or company");
+});
+
+test("memory sentences for a one-off (General) issue name its topic", () => {
+  const m = memorySentence({ ...postman, topic: "agent harnesses", reasons: [{ r: "entity", target: "postman" }, { r: "topic" }] });
+  assert.equal(m.match(/Digest feedback \(one-off digest on "agent harnesses"\):/g)?.length, 2);
+  assert.doesNotMatch(memorySentence(postman), /one-off/);
+});
+
+// ── shared between digests ──
+
+const v = (o: Partial<VoteLike> & { profile?: string }): VoteLike & { profile?: string } => ({ ...postman, reasons: [], ...o });
+
+test("normalizeName treats dashes, dots and case alike", () => {
+  assert.equal(normalizeName("Claude-Code"), "claude code");
+  assert.equal(normalizeName(" claude_code "), "claude code");
+  assert.equal(normalizeName("node.js"), "node js");
+});
+
+test("shared, regular digest: only explicit 'I don't use X' from General issues", () => {
+  const votes = [
+    v({ profile: GENERAL_ID, reasons: [{ r: "entity", target: "postman" }], topic: "api tools" }),
+    v({ profile: GENERAL_ID, vote: "up", reasons: [{ r: "entity", target: "openhands" }] }), // "more about": General's own topic interest
+    v({ profile: GENERAL_ID, entities: ["cursor"] }), // bare 👎: no reason, not shared
+    v({ profile: GENERAL_ID, reasons: [{ r: "topic" }] }), // topic: not shared
+    v({ profile: "agent-memory", reasons: [{ r: "entity", target: "zep" }] }), // another regular digest: not shared with regulars
+  ];
+  const s = sharedEntityPrefs(votes, { profile: "ai-swe" });
+  assert.deepEqual(s.entities.map((e) => [e.name, e.direction, e.from, e.topic]), [["postman", "less", GENERAL_ID, "api tools"]]);
+  assert.match(s.guidance, /within this digest's scope/);
+});
+
+test("shared, General: explicit entity reasons both ways from every other digest, not its own", () => {
+  const votes = [
+    v({ profile: "ai-swe", reasons: [{ r: "entity", target: "postman" }] }),
+    v({ profile: "agent-memory", vote: "up", reasons: [{ r: "entity", target: "mem0" }] }),
+    v({ reasons: [{ r: "entity", target: "jira" }] }), // no profile: counts as the legacy digest
+    v({ profile: GENERAL_ID, reasons: [{ r: "entity", target: "cursor" }] }), // its own: already in its own preferences
+    v({ profile: "ai-swe", vote: "up" }), // bare 👍: not shared
+  ];
+  const s = sharedEntityPrefs(votes, { profile: GENERAL_ID, legacyProfile: "ai-swe" });
+  assert.deepEqual(s.entities.map((e) => `${e.name}:${e.direction}:${e.from}`).sort(), ["jira:less:ai-swe", "mem0:more:agent-memory", "postman:less:ai-swe"]);
+});
+
+test("shared: the newest vote per entity wins, names matched loosely", () => {
+  const votes = [
+    v({ profile: "ai-swe", vote: "up", reasons: [{ r: "entity", target: "claude-code" }], at: "2026-11-01T00:00:00Z" }),
+    v({ profile: "agent-memory", reasons: [{ r: "entity", target: "Claude Code" }], at: "2026-11-05T00:00:00Z" }),
+  ];
+  const s = sharedEntityPrefs(votes, { profile: GENERAL_ID });
+  assert.equal(s.entities.length, 1);
+  assert.equal(s.entities[0]!.direction, "less");
+  assert.equal(s.entities[0]!.at, "2026-11-05");
+});
+
+test("shared: the digest's own preference wins; the run's own topic is never hidden", () => {
+  const votes = [v({ profile: GENERAL_ID, reasons: [{ r: "entity", target: "codex" }] }), v({ profile: GENERAL_ID, headline: "x", item: 2, reasons: [{ r: "entity", target: "postman" }] } as any)];
+  assert.deepEqual(sharedEntityPrefs(votes, { profile: "ai-swe", own: ["Codex"] }).entities.map((e) => e.name), ["postman"]);
+  const forGeneral = [v({ profile: "ai-swe", reasons: [{ r: "entity", target: "postman" }] }), v({ profile: "ai-swe", reasons: [{ r: "entity", target: "codex" }] })];
+  assert.deepEqual(sharedEntityPrefs(forGeneral, { profile: GENERAL_ID, topic: "Postman alternatives" }).entities.map((e) => e.name), ["codex"]);
+  assert.deepEqual(sharedEntityPrefs(forGeneral, { profile: GENERAL_ID, topic: "postmarks" }).entities.length, 2, "whole words only");
 });

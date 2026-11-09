@@ -5,12 +5,14 @@
 // `feedback` conversation's durable state. Each thumbs link carries only a
 // signed {digest, item, vote, expiry} (HMAC-SHA256, FEEDBACK_KEY secret); the
 // thanks page offers reason links ("I don't use Postman", "not interested in
-// this topic", "already knew"; on 👍 also "good source"), signed the same way plus `r`.
+// this topic", "already knew"; on 👍 "more about Postman", "more on this
+// topic"), signed the same way plus `r`.
 // The `feedback` actor keeps every vote exactly (one per item) and writes one
 // sentence per vote, worded by its reason, into Agent Memory (namespace
-// ai-digest, the configured profile, session fb-<digest>-<item>; rewritten in place on
-// change, deleted on undo). preferences.ts turns the votes into entity, topic
-// and source preferences; `reader_preferences` hands them to the model.
+// ai-digest, profile = the digest's id, session fb-<digest>-<item>; rewritten in place on
+// change, deleted on undo). preferences.ts turns the votes into entity and
+// topic preferences, and shares explicit entity reasons between digests;
+// `reader_preferences` hands them to the model.
 
 import { digestSections } from "./images.ts";
 import {
@@ -66,6 +68,8 @@ export interface DigestRecord {
   id: string;
   /** Which digest (definition) this issue belongs to; preferences and memory are kept per digest. */
   profile?: string;
+  /** For a General (one-off) issue: the topic it was asked about. */
+  topic?: string;
   subject: string;
   sentAt: string;
   items: DigestItemRecord[];
@@ -84,6 +88,8 @@ export interface StoredVote {
   vote: Vote;
   /** Which digest the voted item came from (votes count only toward that digest). */
   profile?: string;
+  /** For a vote on a General (one-off) issue: its topic. */
+  topic?: string;
   /** The reasons the reader selected on the thanks page (toggled one at a time). */
   reasons?: Selection[];
   /** Older single-reason votes; read through selectionsOf. */
@@ -362,7 +368,7 @@ export interface ThanksContext {
   item?: DigestItemRecord;
   digest?: DigestRecord;
   prefs: Preferences;
-  /** Reason links by option: "entity:0".."entity:2" (one per entity), "entity" (no entities known), "topic", "source", "known". */
+  /** Reason links by option: "entity:0".."entity:2" (one per entity), "entity" (no entities known), "topic", "known". */
   links: { undo: string; flip: string; view?: string; reasons: Record<string, string> };
 }
 
@@ -381,8 +387,6 @@ export function effect(v: StoredVote, entities: string[], tags: string[]): strin
         return more ? `Items mainly about ${ent} will rank higher.` : `Items mainly about ${ent} will be skipped.`;
       case "topic":
         return more ? `${top} will rank higher.` : `${top} will rank lower. Major news still gets through.`;
-      case "source":
-        return more ? `${v.source} will be preferred when several sources cover a story.` : `Other coverage will be preferred over ${v.source}.`;
       default:
         return "Noted as too obvious.";
     }
@@ -403,11 +407,11 @@ export function thanksPage(c: ThanksContext): Response {
   for (const r of up ? UP_REASONS : DOWN_REASONS) {
     if (r === "entity") {
       entities.slice(0, 3).forEach((e, k) => {
-        if (c.links.reasons[`entity:${k}`]) options.push({ key: `entity:${k}`, label: reasonLabel(c.vote.vote, r, [e], tags, source), on: sels.some((x) => x.r === "entity" && (x.target ?? entities[0]) === e) });
+        if (c.links.reasons[`entity:${k}`]) options.push({ key: `entity:${k}`, label: reasonLabel(c.vote.vote, r, [e], tags), on: sels.some((x) => x.r === "entity" && (x.target ?? entities[0]) === e) });
       });
-      if (!entities.length && c.links.reasons.entity) options.push({ key: "entity", label: reasonLabel(c.vote.vote, r, [], tags, source), on: sels.some((x) => x.r === "entity") });
+      if (!entities.length && c.links.reasons.entity) options.push({ key: "entity", label: reasonLabel(c.vote.vote, r, [], tags), on: sels.some((x) => x.r === "entity") });
     } else if (c.links.reasons[r]) {
-      options.push({ key: r, label: reasonLabel(c.vote.vote, r, entities, tags, source), on: sels.some((x) => x.r === r) });
+      options.push({ key: r, label: reasonLabel(c.vote.vote, r, entities, tags), on: sels.some((x) => x.r === r) });
     }
   }
   const chips = options

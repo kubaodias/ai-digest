@@ -23,11 +23,12 @@ The agent class extends the managed agent loop from `@telnyx/acp` (harness, tool
 | `GET /v1/assets/thumb-up.png`, `thumb-down.png` | anyone | Icons for emails and pages |
 | `GET /v1/feedback?p=…&s=…` | signed links | A thumbs click or reason: records the vote, shows the feedback page |
 | `GET /v1/feedback?view=…&s=…` | signed links | A sent issue's web view |
-| `GET /v1/digests` | operator token | Stored digests (id, title, window, items, schedule, versions) |
+| `GET /v1/digests` | operator token | Stored digests (id, title, window, items, schedule, versions), then the built-in General one (`"builtIn": true`) |
 | `GET /v1/digests/<id>` | operator token | One definition (Markdown) |
 | `PUT /v1/digests/<id>` | operator token | Store a definition (body: Markdown); validated, the last 10 versions kept |
 | `DELETE /v1/digests/<id>` | operator token | Delete a definition (its issues, votes and memory stay) |
 | `POST /v1/digests/<id>/runs` | operator token | Start an issue: `{"message"?: "focus for this issue", "run"?: "name"}` → `202 {"conversation": …}` |
+| `POST /v1/runs` | operator token | A one-off General digest: `{"topic": "…", "window"?: "14d", "items"?: "5-8", "run"?: "name"}` → `202 {"conversation": "__general--…"}` |
 | `GET /v1/runs/<conversation>` | operator token | The conversation's recent runs: `{"runs": [{status, durationMs, toolCalls, tokens, …}]}` |
 | `GET /v1/app`, `/v1/app/digests/<id>` | session cookie | The digests page (read-only) |
 | `GET`/`POST /v1/app/sign-in`, `GET /v1/app/auth?t=…`, `GET /v1/app/sign-out` | anyone | Magic-link sign-in: email a link (at most one a minute), use it (once, 15 minutes), sign out |
@@ -38,7 +39,7 @@ The operator token is `Authorization: Bearer <hex HMAC-SHA256 of "telnyx-acp ope
 ## A digest, step by step
 
 1. **A run starts:** `npm run digests -- run agent-memory` → `POST /v1/digests/agent-memory/runs`. The router loads the definition, builds the request from it (`runMessage` in `src/profile.ts`: title, time window, item range, closing section, the description, and any focus for this issue) and hands it to a new actor, `agent-memory--<run>`.
-2. **Preferences:** the model calls `reader_preferences` first. It returns *this digest's* entity, topic and source preferences from the vote log, plus the summary of its Agent Memory profile (named after the digest). It asks the memory service to rebuild a stale summary and waits up to a minute for it.
+2. **Preferences:** the model calls `reader_preferences` first. It returns *this digest's* entity and topic preferences from the vote log, a `shared` section with explicit product reasons from your other digests ([below](#shared-between-digests)), and the summary of this digest's Agent Memory profile (named after the digest). It asks the memory service to rebuild a stale summary and waits up to a minute for it.
 3. **Research:** up to about 25 `web_search` and `fetch_page` calls, 3–5 in parallel, starting from the sources the definition names. The instructions require items found in this run, inside the window, links to the specific article (never a front page), and primary sources over reposts.
 4. **Writing:** numbered items (`## N. Headline`, *Why it matters*, *Source*) within the item range, and the closing section the definition names (or none).
 5. **Delivery is deterministic.** The model has no email tool. When a run completes, the agent's post-run hook (`rememberRun`) checks whether the reply is a digest, i.e. it has numbered `## N.` items. If so, it reads the digest's definition again and:
@@ -50,6 +51,17 @@ The operator token is `Authorization: Bearer <hex HMAC-SHA256 of "telnyx-acp ope
    - records `emailedAt`, so a retried hook doesn't send twice.
 
    The sender, default recipients and public URL come from secrets (`src/config.ts`), never from the model.
+
+## One-off digests (General)
+
+`npm run digests -- ask "agent harnesses"` → `POST /v1/runs {"topic": "agent harnesses"}`. There's no stored definition: the built-in **General** digest (id `__general`) is a template in `src/general.ts`, in the same format as a digest file.
+
+1. **The topic is cleaned** (`cleanTopic` in `src/profile.ts`): control characters and line breaks become spaces, at most 200 characters.
+2. **The template is parsed first, then filled:** `{topic}` is replaced in the parsed title and description only, so a topic can never add settings such as `to:`. `window` and `items` from the request replace the template's, validated like a file's.
+3. **The run gets its own conversation**, `__general--<topic slug>-<time>`. The router stores the topic in that conversation's state (`prepareGeneralRun`) before sending the request, so concurrent asks never share anything, and the email step rebuilds the definition from it.
+4. **From there it's like any digest:** research, pictures, the email to `DIGEST_EMAIL_TO`, thumbs links. The issue and its votes carry the topic, and the votes go to General's own preferences and Agent Memory profile, `__general`.
+
+The id starts with `_`, which digest ids never can (lowercase letters, digits, single dashes), so no stored digest can take it; `PUT`, `DELETE` and `…/runs` on `/v1/digests/__general` answer `400 built_in`, and `GET` shows the template.
 
 ## Picking pictures
 
@@ -99,42 +111,58 @@ A thumb alone doesn't say *why*. The 👎 page offers:
 - **Not interested in *topics***;
 - **I already knew this**.
 
-The 👍 page offers *More on topics*, *More about X* and *X is a good source*. Any number can be selected, and clicking a selected one deselects it. Clicking the same thumb again keeps them; flipping 👍/👎 clears them.
+The 👍 page offers *More on topics* and *More about X*. Any number can be selected, and clicking a selected one deselects it. Clicking the same thumb again keeps them; flipping 👍/👎 clears them.
 
 ### Per digest
 
-Votes, preferences and memory belong to one digest. A vote is tagged with its issue's digest, `reader_preferences` only counts that digest's votes, and each digest has its own Agent Memory profile. Liking retrieval papers in *agent-memory* doesn't change *ai-swe*. Votes from before 0.2.0 count toward `ai-swe`.
+Votes, preferences and memory belong to one digest. A vote is tagged with its issue's digest, a digest's preferences count only its own votes, and each digest has its own Agent Memory profile. Liking retrieval papers in *agent-memory* doesn't change *ai-swe*. Votes from before 0.2.0 count toward `ai-swe`.
+
+### Shared between digests
+
+Some reasons are facts about you rather than about one digest's topic. `reader_preferences` adds a `shared` section, computed from the vote log when the run starts (nothing is written twice; each vote still goes to one Agent Memory profile):
+
+| This run | Reads from | What |
+|---|---|---|
+| A one-off (General) | every other digest | explicit "I don't use X" **and** "More about X" |
+| A regular digest | General's issues | explicit "I don't use X" only |
+
+- **Only explicit entity reasons.** Bare thumbs, topic reasons and "already knew this" never cross: topic interest from a one-off on "agent harnesses" says nothing about *ai-swe*, and one unexplained 👎 would otherwise block a product everywhere.
+- **"More about X" from a one-off stays there.** It was interest in that topic.
+- **Conflicts:** the newest vote per product wins; the digest's own preference about a product wins over a shared one; and a shared product that is the one-off's own topic is left out ("I don't use Postman" never hides an `ask "Postman alternatives"`).
+- **Names are compared loosely** (case, dashes and dots ignored: "claude-code" = "Claude Code"), and the model is told names may vary.
+- **The model is told** the shared section refines choices within the digest's scope and never widens or narrows it.
+
+This is `sharedEntityPrefs` in `src/preferences.ts`.
 
 ### From votes to preferences (`src/preferences.ts`)
 
-Each vote adds weight toward the item's main entity (or the entity you picked), its other entities, its topics and its source:
+Each vote adds weight toward the item's main entity (or the entity you picked), its other entities and its topics:
 
-| Reason | Main or chosen entity | Other entities | Topics | Source |
-|---|---|---|---|---|
-| none | 0.7 | 0.2 | 0.25 | 0.1 |
-| I don't use X / more about X | 1 (that entity) | 0 | 0 | 0 |
-| not interested / more on topics | 0.3 | 0 | 1 | 0 |
-| good source | 0 | 0 | 0 | 1 |
-| already knew | 0 | 0 | 0 | 0 |
+| Reason | Main or chosen entity | Other entities | Topics |
+|---|---|---|---|
+| none | 0.7 | 0.2 | 0.25 |
+| I don't use X / more about X | 1 (that entity) | 0 | 0 |
+| not interested / more on topics | 0.3 | 0 | 1 |
+| already knew | 0 | 0 | 0 |
 
-With several reasons on one vote, each entity, topic and source takes the strongest weight any of them gives it, so nothing is counted twice.
+With several reasons on one vote, each entity and topic takes the strongest weight any of them gives it, so nothing is counted twice.
 
 - **An entity** becomes a preference from one vote (score ≥ 0.7).
 - **A topic** needs a score of 0.75 *and* either an explicit topic reason or 3 votes the same way. Until then it's listed as *tentative* and ignored. One 👎 on a Postman story means "skip Postman", not "less dev tooling".
-- **A source** needs an explicit reason or many votes.
+- **Sources aren't learned** (since 0.4.0). Votes from before then that ticked "good source" or "weak source" count as if that reason weren't there; a vote whose only reason was one counts for nothing.
 
 The model is told to apply entity preferences strictly, topic preferences softly, ignore tentative topics, and never drop major news because of a preference.
 
 ### Agent Memory
 
-Each vote also writes sentences to [Agent Memory](https://developers.telnyx.com/docs/agent-memory) (namespace `ai-digest`, profile named after the digest, e.g. `agent-memory`; session `fb-<issue>-<item>`), one per reason, e.g. *"I don't use Postman — skip news mainly about Postman. This says nothing about the wider topic."* Changing a vote re-ingests the same session in place.
+Each vote also writes sentences to [Agent Memory](https://developers.telnyx.com/docs/agent-memory) (namespace `ai-digest`, profile named after the digest, e.g. `agent-memory`; session `fb-<issue>-<item>`), one per reason, e.g. *"I don't use Postman — skip news mainly about Postman. This says nothing about the wider topic."* On a one-off issue each sentence names its topic (*"Digest feedback (one-off digest on "agent harnesses"): …"*), so General's summary doesn't blend topics. Changing a vote re-ingests the same session in place.
 
 Undo deletes the memory source, and again two minutes later: ingestion is asynchronous, so a memory still being extracted could otherwise land after the first delete.
 
 The memory service turns these into a profile summary. Two details matter:
 
 - **It only builds the summary when asked** (`GET …/summary?refresh=true`). A plain read of a stale summary returns `null` and builds nothing. `reader_preferences` asks, and waits.
-- **The summary's shape is set by namespace instructions** (`PATCH /v2/ai/memory/namespaces/ai-digest/settings`). [Ours](memory-summary-instructions.md) restricts it to *Wants more of / Wants less of / Sources / Patterns* and rules out identity, location and remarks about the data itself.
+- **The summary's shape is set by namespace instructions** (`PATCH /v2/ai/memory/namespaces/ai-digest/settings`). [Ours](memory-summary-instructions.md) restricts it to *Wants more of / Wants less of / Patterns* and rules out identity, location and remarks about the data itself.
 
 The vote log is the source of truth. The memory summary is a softer, readable view of it.
 

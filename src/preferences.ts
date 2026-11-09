@@ -2,12 +2,11 @@
 // they're covered by test/preferences.test.ts.
 //
 // A vote is about one digest item, which has topic tags ("security", "dev
-// tooling"), entities (the specific products, companies or projects it's
-// about: "postman") and a source domain. A thumb alone doesn't say which of
-// those it's about, so:
+// tooling") and entities (the specific products, companies or projects it's
+// about: "postman"). A thumb alone doesn't say which of those it's about, so:
 //   - the reader can add a reason (one tap on the thanks page), which says
-//     where the vote applies: the entity, the topic, the source, or nowhere
-//     ("already knew it");
+//     where the vote applies: the entity, the topic, or nowhere ("already
+//     knew it");
 //   - "I don't use X" names one entity (an item about Postman also mentions
 //     Codex and Claude Code; the reader picks which one they mean);
 //   - without a reason, a vote applies to the item's main entity (listed
@@ -15,29 +14,35 @@
 //   - a topic counts as a preference only with evidence: an explicit "topic"
 //     reason, or several votes the same way. One 👎 on a Postman story is
 //     "skip Postman", not "less dev tooling".
+// Sources aren't learned (0.4.0 removed the "good source" and "weak source"
+// reasons); older votes that carry one count as if it weren't there.
+//
+// sharedEntityPrefs() is what one digest learns from the others: explicit
+// "I don't use X" / "More about X" reasons only (see its comment).
+
+import { GENERAL_ID } from "./profile.ts";
 
 export type Vote = "up" | "down";
-export type DownReason = "entity" | "topic" | "source" | "known";
-export type UpReason = "entity" | "topic" | "source";
-export type Reason = DownReason | UpReason;
+export type DownReason = "entity" | "topic" | "known";
+export type UpReason = "entity" | "topic";
+/** Stored on votes from before 0.4.0 ("good source", "weak source"); ignored. */
+export type LegacyReason = "source";
+export type Reason = DownReason | UpReason | LegacyReason;
 
-/** The 👎 options offered (no "weak source": the reader didn't want it). Older votes with a source reason still count. */
+/** The reason options offered on the thanks page. */
 export const DOWN_REASONS: readonly DownReason[] = ["entity", "topic", "known"];
-export const UP_REASONS: readonly UpReason[] = ["topic", "entity", "source"];
+export const UP_REASONS: readonly UpReason[] = ["topic", "entity"];
 
 export function validReason(vote: Vote, r: unknown): r is Reason {
   return typeof r === "string" && (vote === "down" ? (DOWN_REASONS as readonly string[]) : (UP_REASONS as readonly string[])).includes(r);
 }
 
 /** The reason options' labels for the thanks page. */
-export function reasonLabel(vote: Vote, r: Reason, entities: string[], tags: string[], source: string): string {
+export function reasonLabel(vote: Vote, r: DownReason | UpReason, entities: string[], tags: string[]): string {
   const ent = entities.length ? entities.map(titleCase).join(", ") : "this product or company"; // pass one entity for a per-entity option
   const top = tags.length ? tags.join(", ") : "this topic";
-  const src = source || "this source";
-  if (vote === "down") {
-    return { entity: `I don't use ${ent}`, topic: `Not interested in ${top}`, source: `${src} is a weak source`, known: "I already knew this" }[r as DownReason];
-  }
-  return { entity: `More about ${ent}`, topic: `More on ${top}`, source: `${src} is a good source`, known: "" }[r as UpReason];
+  if (vote === "down") return { entity: `I don't use ${ent}`, topic: `Not interested in ${top}`, known: "I already knew this" }[r as DownReason];
+  return { entity: `More about ${ent}`, topic: `More on ${top}` }[r as UpReason];
 }
 
 const titleCase = (s: string) => s.replace(/\b\w/g, (c) => c.toUpperCase());
@@ -60,12 +65,19 @@ export interface VoteLike {
   reason?: Reason;
   target?: string;
   at: string;
+  /** For votes on a General (one-off) issue: its topic. */
+  topic?: string;
 }
 
-/** A vote's selected reasons, also for votes stored before multi-select. */
+/** A vote's selected reasons, also for votes stored before multi-select, without the retired source reasons. */
 export function selectionsOf(v: Pick<VoteLike, "reasons" | "reason" | "target">): Selection[] {
-  if (v.reasons) return v.reasons;
-  return v.reason ? [{ r: v.reason, ...(v.target ? { target: v.target } : {}) }] : [];
+  const all = v.reasons ?? (v.reason ? [{ r: v.reason, ...(v.target ? { target: v.target } : {}) }] : []);
+  return all.filter((x) => x.r !== "source");
+}
+
+/** A vote whose only reasons were the retired source ones. */
+function onlyRetiredReasons(v: Pick<VoteLike, "reasons" | "reason">): boolean {
+  return !!(v.reasons?.length || v.reason) && !selectionsOf(v).length;
 }
 
 const sameSelection = (a: Selection, b: Selection) => a.r === b.r && (a.target ?? "") === (b.target ?? "");
@@ -77,17 +89,16 @@ export function toggleSelection(list: Selection[], sel: Selection): Selection[] 
 
 /**
  * How much one vote counts toward the item's main entity (or the reader's
- * chosen one), its other entities, its topics and its source, by reason.
- * With several reasons selected, each entity, topic and source takes the
- * strongest weight any of them gives it (so "I don't use Postman" plus "not
- * interested in security" is 1 for Postman and 1 for security, not more).
+ * chosen one), its other entities and its topics, by reason. With several
+ * reasons selected, each entity and topic takes the strongest weight any of
+ * them gives it (so "I don't use Postman" plus "not interested in security"
+ * is 1 for Postman and 1 for security, not more).
  */
-export const WEIGHTS: Record<Reason | "none", { entity: number; otherEntities: number; topic: number; source: number }> = {
-  none: { entity: 0.7, otherEntities: 0.2, topic: 0.25, source: 0.1 },
-  entity: { entity: 1, otherEntities: 0, topic: 0, source: 0 },
-  topic: { entity: 0.3, otherEntities: 0, topic: 1, source: 0 },
-  source: { entity: 0, otherEntities: 0, topic: 0, source: 1 },
-  known: { entity: 0, otherEntities: 0, topic: 0, source: 0 },
+export const WEIGHTS: Record<DownReason | UpReason | "none", { entity: number; otherEntities: number; topic: number }> = {
+  none: { entity: 0.7, otherEntities: 0.2, topic: 0.25 },
+  entity: { entity: 1, otherEntities: 0, topic: 0 },
+  topic: { entity: 0.3, otherEntities: 0, topic: 1 },
+  known: { entity: 0, otherEntities: 0, topic: 0 },
 };
 
 /** A topic needs this much net weight, and an explicit topic reason or this many same-direction votes, to count. */
@@ -95,8 +106,6 @@ export const TOPIC_MIN_SCORE = 0.75;
 export const TOPIC_MIN_VOTES = 3;
 /** An entity counts from one unexplained vote (0.7). */
 export const ENTITY_MIN_SCORE = 0.7;
-/** A source counts from an explicit reason, or many votes. */
-export const SOURCE_MIN_SCORE = 1;
 
 interface Acc {
   score: number;
@@ -121,7 +130,6 @@ export interface Preferences {
   topics: Preference[];
   /** Topics with some signal but not enough evidence yet. Don't act on these. */
   tentativeTopics: Preference[];
-  sources: Preference[];
   /** Items the reader marked "already knew this". */
   alreadyKnown: string[];
   recent: { vote: Vote; reasons: string[]; headline: string; entities: string[]; tags: string[]; at: string }[];
@@ -150,24 +158,22 @@ function toPrefs(map: Map<string, Acc>, keep: (a: Acc) => boolean, basis: (a: Ac
 export function computePreferences(votes: VoteLike[]): Preferences {
   const entities = new Map<string, Acc>();
   const topics = new Map<string, Acc>();
-  const sources = new Map<string, Acc>();
   const alreadyKnown: string[] = [];
   for (const v of votes) {
     const sign = v.vote === "up" ? 1 : -1;
     const ents = v.entities ?? [];
     const sels = selectionsOf(v);
+    if (!sels.length && onlyRetiredReasons(v)) continue; // e.g. just "good source": explained, but about nothing still learned
     if (!sels.length) {
       const w = WEIGHTS.none;
       if (ents[0]) add(entities, ents[0], sign, w.entity, v.vote, false);
       for (const e of ents.slice(1)) add(entities, e, sign, w.otherEntities, v.vote, false);
       for (const t of v.tags) add(topics, t, sign, w.topic, v.vote, false);
-      add(sources, v.source, sign, w.source, v.vote, false);
       continue;
     }
-    // Several reasons: the strongest weight per entity/topic/source, counted once.
+    // Several reasons: the strongest weight per entity/topic, counted once.
     const ew = new Map<string, { w: number; explicit: boolean }>();
     const tw = new Map<string, { w: number; explicit: boolean }>();
-    const sw = new Map<string, { w: number; explicit: boolean }>();
     const bump = (m: Map<string, { w: number; explicit: boolean }>, k: string | undefined, w: number, explicit: boolean) => {
       if (!k || w === 0) return;
       const c = m.get(k);
@@ -180,11 +186,9 @@ export function computePreferences(votes: VoteLike[]): Preferences {
         for (const t of v.tags) bump(tw, t, WEIGHTS.topic.topic, true);
         bump(ew, ents[0], WEIGHTS.topic.entity, false);
       }
-      if (sel.r === "source") bump(sw, v.source, WEIGHTS.source.source, true);
     }
     for (const [k, x] of ew) add(entities, k, sign, x.w, v.vote, x.explicit);
     for (const [k, x] of tw) add(topics, k, sign, x.w, v.vote, x.explicit);
-    for (const [k, x] of sw) add(sources, k, sign, x.w, v.vote, x.explicit);
   }
   const sameWay = (a: Acc) => Math.max(a.up, a.down);
   const topicQualifies = (a: Acc) => Math.abs(a.score) >= TOPIC_MIN_SCORE - 1e-9 && (a.explicit > 0 || sameWay(a) >= TOPIC_MIN_VOTES);
@@ -198,7 +202,6 @@ export function computePreferences(votes: VoteLike[]): Preferences {
     entities: toPrefs(entities, (a) => Math.abs(a.score) >= ENTITY_MIN_SCORE - 1e-9, basis("entity")),
     topics: toPrefs(topics, topicQualifies, basis("topic")),
     tentativeTopics: toPrefs(topics, (a) => !topicQualifies(a), basis("topic")),
-    sources: toPrefs(sources, (a) => Math.abs(a.score) >= SOURCE_MIN_SCORE - 1e-9, basis("source")),
     alreadyKnown,
     recent,
     guidance:
@@ -209,7 +212,9 @@ export function computePreferences(votes: VoteLike[]): Preferences {
 /** What's written to Agent Memory for a vote: one sentence per selected reason, or the no-reason sentence. */
 export function memorySentence(v: VoteLike): string {
   const sels = selectionsOf(v);
-  return sels.length ? sels.map((sel) => sentence(v, sel)).join(" ") : sentence(v, undefined);
+  const text = sels.length ? sels.map((sel) => sentence(v, sel)).join(" ") : sentence(v, undefined);
+  // One-off issues cover different topics: say which, so the summary doesn't blend them.
+  return v.topic ? text.split("Digest feedback:").join(`Digest feedback (one-off digest on "${v.topic}"):`) : text;
 }
 
 function sentence(v: VoteLike, sel: Selection | undefined): string {
@@ -224,8 +229,6 @@ function sentence(v: VoteLike, sel: Selection | undefined): string {
           : `Digest feedback: I don't use the product or company in ${item} — skip news mainly about it. This says nothing about the wider topic.`;
       case "topic":
         return `Digest feedback: I'm not interested in ${tags || "the topic of " + item} — show less of it (from ${item}).`;
-      case "source":
-        return `Digest feedback: I find ${v.source || "this source"} a weak source — prefer other coverage (from ${item}).`;
       case "known":
         return `Digest feedback: I already knew about ${item}; it was too obvious to include. No topic preference.`;
       default:
@@ -237,9 +240,83 @@ function sentence(v: VoteLike, sel: Selection | undefined): string {
       return `Digest feedback: I want more news about ${ents || "the company or product in " + item} (from ${item}).`;
     case "topic":
       return `Digest feedback: I want more on ${tags || "the topic of " + item} (from ${item}).`;
-    case "source":
-      return `Digest feedback: ${v.source || "this source"} is a good source for me (from ${item}).`;
     default:
       return `Digest feedback: I found ${item} useful${ents ? ` (about ${ents})` : ""}; topics: ${tags || "unspecified"}.`;
   }
+}
+
+// ── shared between digests ───────────────────────────────────────────────────
+
+/** Entity names as the tagger writes them vary ("claude-code", "Claude Code"): compare them normalised. */
+export function normalizeName(s: string): string {
+  return s.toLowerCase().replace(/[-_./]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Whether one name appears in the other as whole words ("codex" ~ "openai codex"). */
+function sameSubject(a: string, b: string): boolean {
+  const x = normalizeName(a);
+  const y = normalizeName(b);
+  return !!x && !!y && (` ${x} `.includes(` ${y} `) || ` ${y} `.includes(` ${x} `));
+}
+
+export interface SharedPreference {
+  name: string;
+  direction: "more" | "less";
+  /** The digest the vote was on. */
+  from: string;
+  /** For votes on a General issue: its topic. */
+  topic?: string;
+  headline: string;
+  at: string;
+}
+
+export interface SharedPreferences {
+  entities: SharedPreference[];
+  guidance: string;
+}
+
+/**
+ * What a digest takes from the reader's other digests: only entity reasons the
+ * reader ticked ("I don't use X", "More about X"); never bare thumbs, topics
+ * or "already knew".
+ *   - The General digest (one-off topics) reads both directions from every
+ *     other digest: a new topic has nothing else to go on.
+ *   - A regular digest reads only "I don't use X" from General issues: "More
+ *     about X" there belonged to that one-off topic.
+ * The newest vote per entity wins; the digest's own preferences (`own`: names
+ * it already has a preference about) win over shared ones; and a shared entity
+ * that is the run's own topic (`topic`) is left out, so "I don't use X" never
+ * hides the very thing the reader asked about.
+ */
+export function sharedEntityPrefs(
+  votes: (VoteLike & { profile?: string })[],
+  opts: { profile: string; own?: string[]; topic?: string; legacyProfile?: string },
+): SharedPreferences {
+  const general = opts.profile === GENERAL_ID;
+  const latest = new Map<string, SharedPreference>();
+  for (const v of votes) {
+    const from = v.profile ?? opts.legacyProfile ?? "";
+    if (from === opts.profile) continue;
+    if (!general && (from !== GENERAL_ID || v.vote !== "down")) continue;
+    for (const sel of selectionsOf(v)) {
+      if (sel.r !== "entity") continue;
+      const name = sel.target ?? v.entities?.[0];
+      if (!name) continue;
+      const key = normalizeName(name);
+      const prev = latest.get(key);
+      if (prev && prev.at >= v.at) continue;
+      latest.set(key, { name, direction: v.vote === "up" ? "more" : "less", from, ...(v.topic ? { topic: v.topic } : {}), headline: v.headline, at: v.at });
+    }
+  }
+  const own = new Set((opts.own ?? []).map(normalizeName));
+  const entities = [...latest.entries()]
+    .filter(([key, p]) => !own.has(key) && !(opts.topic && sameSubject(p.name, opts.topic)))
+    .map(([, p]) => ({ ...p, at: p.at.slice(0, 10) }))
+    .sort((a, b) => b.at.localeCompare(a.at));
+  return {
+    entities,
+    guidance: general
+      ? "From the reader's other digests: products and companies they said they don't use (skip items mainly about them) or want more about (favour them when they're relevant to this topic). This digest's own preferences win. Names may be spelled differently."
+      : "From the reader's one-off digests: products and companies they said they don't use. Skip items mainly about them, within this digest's scope only; never widen or narrow the scope because of this. This digest's own preferences win. Names may be spelled differently.",
+  };
 }

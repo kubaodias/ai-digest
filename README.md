@@ -13,11 +13,12 @@ It runs entirely on Telnyx: Edge Compute for hosting and durable state, Telnyx I
 ## What it does
 
 - **Digests you define.** One file per digest, e.g. `digests/agent-memory.md`, with its title, topic and audience, sources, time window, length and closing section. Your digests stay private: the folder is git-ignored and stored on your own function.
+- **One-off digests on any topic**, on demand: `npm run digests -- ask "agent harnesses"`. A built-in General digest fills its template with your topic; no file needed.
 - **Researches** each issue with about 25 web searches and page reads, using only items from the requested window and linking to the specific articles.
 - **Illustrates** items with pictures from the source articles, only when a vision model judges them informative for that digest's reader: charts, diagrams, product screenshots.
 - **Emails** every finished digest from your own domain, to the digest's recipients. Sending is done by code, not left to the model.
 - **Shows your digests on a page** at `/v1/app` on your function, behind a magic-link sign-in: each digest's settings and description, its recent issues, what it learned from your votes, and its Agent Memory summary.
-- **Learns per digest** from grey 👍/👎 links under each item. After a click you can say why, picking any number of reasons ("I don't use Postman", "not interested in this topic", "already knew it"). Each digest keeps its own vote log and Agent Memory profile, named after the digest.
+- **Learns per digest** from grey 👍/👎 links under each item. After a click you can say why, picking any number of reasons ("I don't use Postman", "not interested in this topic", "already knew it"). Each digest keeps its own vote log and Agent Memory profile, named after the digest. Only explicit product reasons cross between digests: one-off digests know what you don't use or want more of from your other digests, and your regular digests learn the products you said you don't use in one-offs.
 
 <p align="center">
   <img src="docs/images/email-diagrams.png" width="420" alt="A digest item about OpenAI's Git backend, illustrated with two diagrams taken from the article">
@@ -51,6 +52,7 @@ Examples to copy: [`examples/digests/`](examples/digests). All settings are desc
 ```sh
 npm run digests -- push               # upload digests/*.md to your function
 npm run digests -- run agent-memory   # start an issue now (3–5 minutes, then it's emailed)
+npm run digests -- ask "agent harnesses"   # a one-off digest on any topic
 npm run digests -- list
 ```
 

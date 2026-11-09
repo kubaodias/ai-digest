@@ -63,12 +63,13 @@ const server = http.createServer(async (req, res) => {
     { id: "20261107-8xxl", profile: "agent-memory", subject: "Agent Memory Weekly — Oct 25 – Nov 8, 2026", sentAt: "2026-11-07T22:11:56Z", items: 7 },
     { id: "20261031-q1zr", profile: "agent-memory", subject: "Agent Memory Weekly — Oct 18 – Nov 1, 2026", sentAt: "2026-10-31T08:00:00Z", items: 8 },
     { id: "20261107-gfar", profile: "ai-swe", subject: "AI & Software Engineering Digest — 1–7 November 2026", sentAt: "2026-11-07T10:20:00Z", items: 13 },
+    { id: "20261109-k2pd", profile: "__general", topic: "agent harnesses", subject: "Agent harnesses — 2–9 November 2026", sentAt: "2026-11-09T08:00:00Z", items: 6 },
   ];
   const summaries = stored.map((d) => {
     const p = parseProfile(d.id, d.markdown);
     return { id: d.id, title: p.title, windowDays: p.windowDays, items: p.items, schedule: p.schedule ?? null, updatedAt: d.updatedAt, versions: d.versions };
   });
-  if (url.pathname === "/app") return send(await listPage(summaries, { issues, votes: { "agent-memory": 3, "ai-swe": 5 } }, { "agent-memory": 4, "ai-swe": 8 }).text(), "text/html");
+  if (url.pathname === "/app") return send(await listPage(summaries, { issues, votes: { "agent-memory": 3, "ai-swe": 5, __general: 2 } }, { "agent-memory": 4, "ai-swe": 8, __general: 2 }).text(), "text/html");
   if (url.pathname === "/app-digest") {
     const prefs = computePreferences([
       { vote: "up", headline: "Mem0 state of memory", tags: ["agent memory", "benchmarks"], entities: ["mem0"], source: "mem0.ai", reasons: [{ r: "entity", target: "mem0" }], at: "2026-11-07T21:37:00Z" },

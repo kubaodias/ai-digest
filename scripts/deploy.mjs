@@ -174,4 +174,4 @@ const instructions = readFileSync(join(root, "docs/memory-summary-instructions.m
 await telnyx(env, "PATCH", "/ai/memory/namespaces/ai-digest/settings", { summary: { instructions } });
 console.log("  ✓ applied");
 
-say(`Done.\n  Your digests: ${url}/v1/app\n  Start one:    npm run digests -- run ${files[0]?.replace(/\.md$/, "") ?? "<digest>"}`);
+say(`Done.\n  Your digests: ${url}/v1/app\n  Start one:    npm run digests -- run ${files[0]?.replace(/\.md$/, "") ?? "<digest>"}\n  One-off:      npm run digests -- ask "<any topic>"`);

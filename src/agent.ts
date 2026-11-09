@@ -5,10 +5,10 @@ import { z } from "zod";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { addImages } from "./images.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
-import { DOWN_REASONS, UP_REASONS } from "./preferences.ts";
+import { DOWN_REASONS, UP_REASONS, sharedEntityPrefs } from "./preferences.ts";
 import { digestFromReply } from "./digest.ts";
 import { SECRET, loadConfig, secret } from "./config.ts";
-import { LEGACY_PROFILE, audienceOf, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
+import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
 import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
   FEEDBACK_CONVERSATION, KEEP_DIGESTS, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
@@ -18,8 +18,9 @@ import {
 // ai-digest: a research agent on Telnyx Edge Compute that writes email digests
 // on any topic, defined per digest (profile.ts), emails them, and learns from
 // thumbs feedback, separately for each digest. Each conversation is one durable
-// instance of this class: "<digest>--<run>" for runs, plus two service actors,
-// "feedback" (votes, sent issues) and "digests" (the definitions).
+// instance of this class: "<digest>--<run>" for runs (the built-in General
+// digest's runs are "__general--<run>" and keep their topic in state), plus two
+// service actors, "feedback" (votes, sent issues) and "digests" (the definitions).
 // Account-specific settings are Telnyx secrets: see config.ts.
 
 /** The service actor that stores the digest definitions. */
@@ -118,23 +119,25 @@ interface ActorHolder {
   actor?: AiDigest;
 }
 
-/** The tools this class adds over agent.json's web_search/fetch_page: the reader's preferences. */
+/** The tools this class adds over web_search/fetch_page: the reader's preferences. */
 function emailTools(env: ManagedEnv, holder: ActorHolder) {
   return {
     reader_preferences: tool({
       description:
-        "This digest's reader preferences, learned from their thumbs feedback on past issues of this digest: entity preferences (specific products/companies: apply strictly), topic preferences with enough evidence (apply softly), tentative topics (ignore), source preferences, recent votes with reasons, and a memory summary. Call once before researching.",
+        "This digest's reader preferences, learned from their thumbs feedback: `feedback` from this digest's own past issues (entity preferences: apply strictly; topic preferences with enough evidence: apply softly; tentative topics: ignore; recent votes with reasons), `shared` entity preferences from the reader's other digests (see its guidance), and a memory summary. Call once before researching.",
       inputSchema: z.object({}),
       execute: async () => {
         const profile = profileIdOf(holder.actor?.conversationName()) ?? LEGACY_PROFILE;
-        const out: Record<string, unknown> = { digest: profile };
+        const topic = profile === GENERAL_ID ? (await holder.actor?.generalRun())?.topic : undefined;
+        const out: Record<string, unknown> = { digest: profile, ...(topic ? { topic } : {}) };
         try {
           out.feedback = await feedbackActor(env).feedbackStats(profile);
+          out.shared = await feedbackActor(env).sharedPreferences(profile, topic);
         } catch (err) {
           out.feedbackError = err instanceof Error ? err.message : String(err);
         }
         out.memorySummary = await readMemorySummary(env, profile).catch(() => null);
-        console.log(JSON.stringify({ toolCall: "reader_preferences", digest: profile, votes: (out.feedback as any)?.votes ?? 0, memory: out.memorySummary ? "yes" : "none" }));
+        console.log(JSON.stringify({ toolCall: "reader_preferences", digest: profile, votes: (out.feedback as any)?.votes ?? 0, shared: (out.shared as any)?.entities?.length ?? 0, memory: out.memorySummary ? "yes" : "none" }));
         return out;
       },
     }),
@@ -179,7 +182,7 @@ async function sendDigestEmail(
     if (key) {
       const r = await addFeedbackLinks(telnyx, key, base, digestId, subject, markdown, htmlMarkdown, pickedImages);
       htmlMarkdown = r.markdown;
-      record = { ...r.record, profile: profileId };
+      record = { ...r.record, profile: profileId, ...(profile?.topic ? { topic: profile.topic } : {}) };
       feedbackItems = r.record.items.length;
       log({ feedback: "links added", digest: digestId, items: feedbackItems, tags: r.record.items.map((i) => i.tags) });
     } else log({ feedback: "no FEEDBACK_KEY; links skipped" });
@@ -229,6 +232,28 @@ export class AiDigest extends ManagedAgent {
     return claims;
   }
 
+  /**
+   * A General run's settings, stored in this run's own conversation before
+   * the request is sent (the router calls it in-process; not @rpc). Each run
+   * has its own conversation, so concurrent asks never share it.
+   */
+  async prepareGeneralRun(run: { topic: string; window?: string; items?: string }) {
+    const p = generalProfile(run.topic, run); // validates again
+    await (this as any).setState({ general: { topic: p.topic, window: `${p.windowDays}d`, items: `${p.items.min}-${p.items.max}` } });
+    return { topic: p.topic };
+  }
+
+  /** This conversation's General digest definition, or undefined (not a General run, or no topic stored). */
+  async generalRun(): Promise<DigestProfile | undefined> {
+    const g = ((await (this as any).getState()) as any)?.general;
+    if (!g?.topic) return undefined;
+    try {
+      return generalProfile(g.topic, g);
+    } catch {
+      return undefined;
+    }
+  }
+
   /** A digest was emailed from this conversation now (guards against a second send for the same run). */
   async markEmailed() {
     await (this as any).setState({ emailedAt: Date.now() });
@@ -255,8 +280,8 @@ export class AiDigest extends ManagedAgent {
       if (!digest) return; // not a digest (an answer, an error, a question): nothing to email
       const { subject, markdown } = digest;
       const profileId = profileIdOf(conversation) ?? LEGACY_PROFILE;
-      const profile = await loadProfile(this.agentEnv, profileId);
-      console.log(JSON.stringify({ digestEmail: "sending", runId, digest: profileId, definition: profile ? "stored" : "defaults" }));
+      const profile = profileId === GENERAL_ID ? await this.generalRun() : await loadProfile(this.agentEnv, profileId);
+      console.log(JSON.stringify({ digestEmail: "sending", runId, digest: profileId, definition: profile ? (profileId === GENERAL_ID ? "general" : "stored") : "defaults" }));
       const result = await sendDigestEmail(this.agentEnv, { subject, markdown, profileId, profile });
       if (result.ok) await this.markEmailed();
       console.log(JSON.stringify({ digestEmail: result.ok ? "sent" : "failed", runId, ...(result.ok ? { id: (result as any).id } : { error: (result as any).error }) }));
@@ -332,6 +357,7 @@ export class AiDigest extends ManagedAgent {
       }
       const { vote, changed } = nextVote(prior, p, item, new Date().toISOString());
       vote.profile ??= profile;
+      if (digest?.topic) vote.topic ??= digest.topic;
       // "I don't use X" needs to know X: fill in entities for votes on items tagged before entities existed; the main one is meant.
       const untargeted = vote.reasons?.find((x) => x.r === "entity" && !x.target);
       if (untargeted && !vote.entities?.length) {
@@ -392,7 +418,7 @@ export class AiDigest extends ManagedAgent {
   async appOverview() {
     const state: any = await (this as any).getState();
     const issues = (Object.values(state?.digests ?? {}).filter(Boolean) as DigestRecord[])
-      .map((d) => ({ id: d.id, profile: d.profile ?? LEGACY_PROFILE, subject: d.subject, sentAt: d.sentAt, items: d.items.length }))
+      .map((d) => ({ id: d.id, profile: d.profile ?? LEGACY_PROFILE, ...(d.topic ? { topic: d.topic } : {}), subject: d.subject, sentAt: d.sentAt, items: d.items.length }))
       .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
     const votes: Record<string, number> = {};
     for (const v of Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]) votes[v.profile ?? LEGACY_PROFILE] = (votes[v.profile ?? LEGACY_PROFILE] ?? 0) + 1;
@@ -404,6 +430,18 @@ export class AiDigest extends ManagedAgent {
     const state: any = await (this as any).getState();
     const votes = (Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]).filter((v) => (v.profile ?? LEGACY_PROFILE) === profile);
     return preferencesFrom(votes);
+  }
+
+  /**
+   * What a digest takes from the reader's other digests (preferences.ts,
+   * sharedEntityPrefs): explicit entity reasons only. `topic` is a General
+   * run's topic, never hidden by a shared "I don't use". Called in-process; not @rpc.
+   */
+  async sharedPreferences(profile: string = LEGACY_PROFILE, topic?: string) {
+    const state: any = await (this as any).getState();
+    const all = Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[];
+    const own = preferencesFrom(all.filter((v) => (v.profile ?? LEGACY_PROFILE) === profile)).entities.map((e) => e.name);
+    return sharedEntityPrefs(all, { profile, own, topic, legacyProfile: LEGACY_PROFILE });
   }
 
   // ── the `digests` actor: digest definitions (called in-process by the router) ──

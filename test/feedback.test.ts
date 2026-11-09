@@ -243,18 +243,21 @@ test("thanks page order: article title, then More/Less like this, then the descr
   assert.match(html, /<footer><span>AI Digest · made with <a href="https:\/\/telnyx\.com\/products\/edge-compute">Telnyx Edge Compute<\/a><\/span><img src="https:\/\/www\.activepieces\.com\/piece-icon\/telnyx"/);
 });
 
-test("👎 options don't include 'weak source' (even if a link for it were passed); 👍 keeps 'good source'", async () => {
+test("no source options either way (even if a link for one were passed)", async () => {
   const down = nextVote(undefined, pay(), item, T).vote;
   const dHtml = await thanksPage({ base: BASE, vote: down, item, prefs: preferencesFrom([down]), links: { undo: "#u", flip: "#f", reasons: { "entity:0": "#e0", topic: "#t", source: "#s", known: "#k" } } }).text();
-  assert.doesNotMatch(dHtml, /weak source/);
+  assert.doesNotMatch(dHtml, /weak source|href="#s"/);
   const up = nextVote(undefined, pay({ v: "up" }), item, T).vote;
   const uHtml = await thanksPage({ base: BASE, vote: up, item, prefs: preferencesFrom([up]), links: { undo: "#u", flip: "#f", reasons: { "entity:0": "#e0", topic: "#t", source: "#s" } } }).text();
-  assert.match(uHtml, /github\.com is a good source/);
+  assert.doesNotMatch(uHtml, /good source|href="#s"/);
+  assert.match(uHtml, /More about Postman/);
 });
 
-test("a 👎 'source' reason link is no longer accepted", async () => {
-  const q = new URL((await feedbackLink(KEY, BASE, { d: "d", i: 1, v: "down", e: future, r: "source" })).replace(/&amp;/g, "&")).searchParams;
-  assert.equal(await verifyPayload(KEY, q.get("p")!, q.get("s")!), undefined);
+test("'source' reason links are no longer accepted, 👍 or 👎", async () => {
+  for (const v of ["down", "up"] as const) {
+    const q = new URL((await feedbackLink(KEY, BASE, { d: "d", i: 1, v, e: future, r: "source" })).replace(/&amp;/g, "&")).searchParams;
+    assert.equal(await verifyPayload(KEY, q.get("p")!, q.get("s")!), undefined, v);
+  }
 });
 
 test("links and icons use the configured public URL, nothing hard-coded", async () => {

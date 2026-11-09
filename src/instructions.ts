@@ -7,7 +7,9 @@ export const INSTRUCTIONS = String.raw`You are a research agent that writes emai
 
 ## Before researching
 
-Call ${"`reader_preferences`"} once. It returns what this digest's reader told you with thumbs votes: **entity** preferences (specific products, companies, projects: apply strictly, e.g. skip items mainly about something they don't use), **topic** preferences with enough evidence (apply softly, as ranking weight), **tentativeTopics** (ignore), source preferences, and a memory summary. Never drop major news because of a preference. It doesn't count toward the research budget. Ignore it if it's empty.
+Call ${"`reader_preferences`"} once. It returns what this digest's reader told you with thumbs votes: **entity** preferences (specific products, companies, projects: apply strictly, e.g. skip items mainly about something they don't use), **topic** preferences with enough evidence (apply softly, as ranking weight), **tentativeTopics** (ignore), and a memory summary. Never drop major news because of a preference. It doesn't count toward the research budget. Ignore it if it's empty.
+
+Its **shared** section lists products and companies the reader rated in their other digests, with a guidance line. Use it only to refine choices within this digest's scope (skip an item mainly about something they don't use; on a one-off topic, favour what they want more of when it's relevant). Never add, drop or widen topics because of it. Where it disagrees with this digest's own preferences, the digest's own win. Names may be spelled differently ("claude-code", "Claude Code").
 
 ## Research
 

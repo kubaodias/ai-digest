@@ -149,12 +149,23 @@ npm run digests -- delete <id>        # its sent issues, votes and memory stay
 
 Editing a digest only needs `push`, not a deploy. The function keeps the last 10 versions of each definition.
 
+### One-off digests on any topic
+
+```sh
+npm run digests -- ask "agent harnesses"
+npm run digests -- ask "voice AI latency" --window 14d --items 5-8   # optional: window (1–90 days), items (1–30)
+```
+
+`ask` runs the built-in **General** digest (id `__general`): a template in [`src/general.ts`](../src/general.ts) whose `{topic}` is filled with yours, in the title and the description, and nothing else. It's emailed to `DIGEST_EMAIL_TO` with pictures and 👍/👎 links like any digest, and `status` follows it the same way (`ask` prints the conversation, e.g. `__general--agent-harnesses-2026-11-09t0712`). The topic is one line of at most 200 characters.
+
+General has its own votes and Agent Memory profile, `__general`. A one-off run also reads the products and companies you explicitly marked "I don't use" or "more about" in your other digests; your regular digests read only the "I don't use" ones from one-offs ([how](HOW-IT-WORKS.md#shared-between-digests)). The id starts with `_`, which digest file names can't, so it never clashes with one of yours; `push`, `PUT` and `DELETE` refuse it.
+
 ## 8. Your digests page
 
 The deploy prints its address: `https://<your function>/v1/app`. Open it and click **Email me a sign-in link**. The link goes to `ADMIN_EMAIL` (or the first `DIGEST_EMAIL_TO` address), works once and expires in 15 minutes; clicking it signs you in for 30 days on that browser. At most one link is sent per minute.
 
 The page is read-only. It shows:
-- **every digest:** its settings, last issue, vote count and memory size;
+- **every digest:** its settings, last issue, vote count and memory size, plus a **General** card for one-off digests;
 - **each digest:** its settings and description (and the raw file), its recent issues (each opens the sent email), what it learned from your votes, and its Agent Memory summary.
 
 Sign-in links and sessions are signed with keys derived from `AGENT_AUTH_KEY`, so changing that key signs every browser out.
@@ -179,7 +190,7 @@ where `$TOKEN` is the hex HMAC-SHA256 of the text `telnyx-acp operator` keyed wi
 
 ## 10. Give feedback
 
-Each item ends with grey **Useful? 👍 👎** links. A click records the vote and opens a page where you can say why: one or more of "I don't use *product*", "not interested in *topics*", "already knew this" (or, on 👍, "more about *company*", "*source* is a good source"). Click a selected reason again to deselect it. Votes count only toward the digest they came from; the next issue of that digest ranks with them.
+Each item ends with grey **Useful? 👍 👎** links. A click records the vote and opens a page where you can say why: one or more of "I don't use *product*", "not interested in *topics*", "already knew this" (or, on 👍, "more about *company*", "more on *topics*"). Click a selected reason again to deselect it. Votes count toward the digest they came from; the next issue of that digest ranks with them. Explicit "I don't use" / "more about" reasons are also shared between digests as described above.
 
 ## Custom domain (optional)
 
@@ -212,6 +223,7 @@ Each ship is a new revision (`telnyx-edge revisions list ai-digest`). Votes, sen
 | `npm run digests` says `401 … operator token` | `AGENT_AUTH_KEY` in `.env` doesn't match the function's secret. Run `npm run deploy` to store it again. |
 | `push` says `✗ <id>: …` | The definition has a mistake; the message names the setting. |
 | `run` says `no digest "<id>"` | Push it first: `npm run digests -- push <id>`. |
+| `ask` says `invalid_run` | The topic is empty or over 200 characters, or `--window`/`--items` is out of range (1–90 days, 1–30 items). |
 | No email after a run | `telnyx-edge actors logs AiDigest --type runtime`: look for `digestEmail` and `missing secrets`. Check the sender's domain is verified. (`telnyx-edge logs ai-digest` shows the function's own requests.) |
 | Email lands in spam or fails DMARC | Check the domain shows ownership, DKIM and SPF **verified**, and that there's only one SPF record. |
 | Every request returns 500 with `hydration failed … fence … 401` | A stale storage token on the platform side. Updating the function's binding forces a new one: `GET /v2/compute/bindings`, then `PUT /v2/compute/bindings/{id}` with the same `binding_type` and `env_name`. |
