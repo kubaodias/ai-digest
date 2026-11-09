@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-09
+
 ### Fixed
 
 - On a custom domain, sign-in links (and the feedback page's links) pointed to the function's `*.telnyxcompute.com` address: requests reach the function with that host. With `PUBLIC_URL` set, links are now built from it.
