@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
 ### Added
 
 - **One-off digests on any topic:** `npm run digests -- ask "<topic>" [--window 14d] [--items 5-8] [--run name]`, or `POST /v1/runs {"topic", "window"?, "items"?, "run"?}`. They run the built-in **General** digest (id `__general`), a template in `src/general.ts` whose `{topic}` is filled in after parsing, in the title and description only. The topic is cleaned to one line of at most 200 characters, so it can't add settings or recipients. Each run has its own conversation (`__general--<topic>-<time>`) holding its topic, and is emailed to `DIGEST_EMAIL_TO` like any digest.
