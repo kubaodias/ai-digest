@@ -45,7 +45,7 @@ test("public routes: health, icons, signed feedback pages (v1 and the pre-0.2.0 
   const { env, calls } = fakeEnv();
   const health = await route(req("/v1/health"), env);
   assert.equal(health.status, 200);
-  assert.equal((await health.json()).version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, "/v1/health reports package.json's version (npm run release keeps them in step)");
+  assert.equal((await health.json()).version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, "/v1/health reports package.json's version (ai-digest release keeps them in step)");
   const icon = await route(req("/v1/assets/thumb-up.png"), env);
   assert.equal(icon.headers.get("content-type"), "image/png");
   await route(req("/v1/feedback?p=x&s=y"), env);
@@ -98,7 +98,7 @@ test("runs: start one for a stored digest in its own conversation, with the defi
   assert.equal(body.conversation, "agent-memory--w45");
   const receive = calls.find((c) => c.method === "receive")!;
   assert.equal(receive.actor, "agent-memory--w45");
-  assert.match(String(receive.args[0]), /Agent Memory Weekly/);
+  assert.match(String(receive.args[0]), /Agent Memory — /);
   assert.match(String(receive.args[0]), /For this issue in particular: focus on MCP/);
   const status = await route(req("/v1/runs/agent-memory--w45", { headers: h }), env);
   assert.deepEqual((await status.json()).runs, [{ runId: "run-1", status: "completed", durationMs: 260233, toolCalls: 26 }], "runs as a list (the actor returns { runs })");

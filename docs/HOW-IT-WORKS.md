@@ -36,11 +36,11 @@ The agent class extends the managed agent loop from `@telnyx/acp` (harness, tool
 | `GET`/`POST /v1/app/sign-in`, `GET /v1/app/auth?t=…`, `GET /v1/app/sign-out` | anyone | Magic-link sign-in: email a link (at most one a minute), use it (once, 15 minutes), sign out |
 | `GET /agents/ai-digest/feedback?…` | signed links | Same as `/v1/feedback`, for emails sent before 0.2.0 |
 
-The operator token is `Authorization: Bearer <hex HMAC-SHA256 of "telnyx-acp operator", keyed with AGENT_AUTH_KEY>` (`src/auth.ts`); `npm run digests` sends it. Errors are JSON: `{"error": …, "message": …}`.
+The operator token is `Authorization: Bearer <hex HMAC-SHA256 of "telnyx-acp operator", keyed with AGENT_AUTH_KEY>` (`src/auth.ts`); `ai-digest` sends it. Errors are JSON: `{"error": …, "message": …}`.
 
 ## A digest, step by step
 
-1. **A run starts:** `npm run digests -- run agent-memory` → `POST /v1/digests/agent-memory/runs`. The router loads the definition, builds the request from it (`runMessage` in `src/profile.ts`: title, time window, item range, closing section, the description, and any focus for this issue) and hands it to a new actor, `agent-memory--<run>`.
+1. **A run starts:** `ai-digest run agent-memory` → `POST /v1/digests/agent-memory/runs`. The router loads the definition, builds the request from it (`runMessage` in `src/profile.ts`: title, time window, item range, closing section, the description, and any focus for this issue) and hands it to a new actor, `agent-memory--<run>`.
 2. **Preferences:** the model calls `reader_preferences` first. It returns *this digest's* entity and topic preferences from the vote log, a `shared` section with explicit product reasons from your other digests ([below](#shared-between-digests)), and the summary of this digest's Agent Memory profile (named after the digest). It asks the memory service to rebuild a stale summary and waits up to a minute for it.
 3. **Research:** up to about 25 `web_search` and `fetch_page` calls, 3–5 in parallel, starting from the sources the definition names. The instructions require items found in this run, inside the window, links to the specific article (never a front page), and primary sources over reposts.
 4. **Writing:** numbered items (`## N. Headline`, *Why it matters*, *Source*) within the item range, and the closing section the definition names (or none).
@@ -66,7 +66,7 @@ A digest with `watch:` ([spec 0010](spec/0010-watching.md)) has a **pool actor**
 
 ## One-off digests (General)
 
-`npm run digests -- ask "agent harnesses"` → `POST /v1/runs {"topic": "agent harnesses"}`. There's no stored definition: the built-in **General** digest (id `__general`) is a template in `src/general.ts`, in the same format as a digest file.
+`ai-digest ask "agent harnesses"` → `POST /v1/runs {"topic": "agent harnesses"}`. There's no stored definition: the built-in **General** digest (id `__general`) is a template in `src/general.ts`, in the same format as a digest file.
 
 1. **The topic is cleaned** (`cleanTopic` in `src/profile.ts`): control characters and line breaks become spaces, at most 200 characters.
 2. **The template is parsed first, then filled:** `{topic}` is replaced in the parsed title and description only, so a topic can never add settings such as `to:`. `window` and `items` from the request replace the template's, validated like a file's.

@@ -55,8 +55,11 @@ More in [Domains](https://developers.telnyx.com/docs/messaging/email/domains) an
 git clone https://github.com/kubaodias/ai-digest.git
 cd ai-digest
 npm install
+npm link            # installs the ai-digest command (use ./bin/ai-digest.mjs if you'd rather not)
 cp .env.example .env
 ```
+
+Every command in this guide is `ai-digest <command>`; `ai-digest help` lists them. The npm scripts still work too (`npm run digests -- list` is `ai-digest list`, `npm run deploy` is `ai-digest deploy`).
 
 Edit `.env`:
 
@@ -86,7 +89,7 @@ The file name is the digest's id (lowercase letters, digits and dashes). It's al
 
 ```markdown
 ---
-title: "Agent Memory Weekly — {range}"   # required: email subject and heading; {range} becomes the dates
+title: "Agent Memory — {range}"   # required: email subject and heading; {range} becomes the dates
 window: 14d                               # optional: days to look back (1d–90d, default 7d)
 items: 5-10                               # optional: how many items (default 5-15)
 closing: Takeaways                        # optional: closing section heading, or "none" (default "Themes this week")
@@ -109,7 +112,7 @@ Only `title` and the description are required. Unknown settings or invalid value
 ## 6. Deploy
 
 ```sh
-npm run deploy
+ai-digest deploy
 ```
 
 This:
@@ -126,25 +129,25 @@ At the end it prints `…/v1/health`, which should return `{"ok": true, …}`.
 ## 7. Get your first digest
 
 ```sh
-npm run digests -- run ai-swe
-npm run digests -- run agent-memory "anything new on MCP memory servers"   # optional focus for this issue
+ai-digest run ai-swe
+ai-digest run agent-memory "anything new on MCP memory servers"   # optional focus for this issue
 ```
 
 Each run takes 3–5 minutes and is emailed when it's done. Follow one with the conversation name `run` prints:
 
 ```sh
-npm run digests -- status agent-memory--2026-11-07t2155
+ai-digest status agent-memory--2026-11-07t2155
 telnyx-edge actors logs AiDigest --type runtime    # look for {"digestEmail":"sent"}
 ```
 
 Other commands:
 
 ```sh
-npm run digests -- list               # what's stored on the function
-npm run digests -- push [id…]         # after editing files in digests/ (no redeploy needed)
-npm run digests -- pull [id…]         # download what's stored into digests/
-npm run digests -- show <id>
-npm run digests -- delete <id>        # its sent issues, votes and memory stay
+ai-digest list               # what's stored on the function
+ai-digest push [id…]         # after editing files in digests/ (no redeploy needed)
+ai-digest pull [id…]         # download what's stored into digests/
+ai-digest show <id>
+ai-digest delete <id>        # its sent issues, votes and memory stay
 ```
 
 Editing a digest only needs `push`, not a deploy. The function keeps the last 10 versions of each definition.
@@ -152,8 +155,8 @@ Editing a digest only needs `push`, not a deploy. The function keeps the last 10
 ### One-off digests on any topic
 
 ```sh
-npm run digests -- ask "agent harnesses"
-npm run digests -- ask "voice AI latency" --window 14d --items 5-8   # optional: window (1–90 days), items (1–30)
+ai-digest ask "agent harnesses"
+ai-digest ask "voice AI latency" --window 14d --items 5-8   # optional: window (1–90 days), items (1–30)
 ```
 
 `ask` runs the built-in **General** digest (id `__general`): a template in [`src/general.ts`](../src/general.ts) whose `{topic}` is filled with yours, in the title and the description, and nothing else. It's emailed to `DIGEST_EMAIL_TO` with pictures and 👍/👎 links like any digest, and `status` follows it the same way (`ask` prints the conversation, e.g. `__general--agent-harnesses-2026-11-09t0712`). The topic is one line of at most 200 characters.
@@ -187,15 +190,15 @@ Push the file and the timer starts; the first check runs 1–16 minutes later, t
 - **Scores** combine the model's importance estimate with how many independent sources covered a story, how many checks found it again, primary sources, your feedback, and age. A story mainly about a product you said you don't use never gets in.
 - **Variety:** an issue has at most 2 stories about the same product (the rest wait for the next one), and lists up to 3 sources per story, the maker's own page first.
 - **Pictures** are only picked when an issue is sent, for the stories in it.
-- **Follow it:** `npm run digests -- pool <id>` shows the pool, the next check and why no issue has gone out yet; the digests page has the same card.
-- **By hand:** `npm run digests -- run <id>` runs a check and then writes an issue from the pool whatever the thresholds say (`--from-pool`: write from the pool now). `npm run digests -- watch <id> [--since 2026-11-02 --until 2026-11-04] [--no-send]` runs a check now, optionally over a past window and without sending.
+- **Follow it:** `ai-digest pool <id>` shows the pool, the next check and why no issue has gone out yet; the digests page has the same card.
+- **By hand:** `ai-digest run <id>` runs a check and then writes an issue from the pool whatever the thresholds say (`--from-pool`: write from the pool now). `ai-digest watch <id> [--since 2026-11-02 --until 2026-11-04] [--no-send]` runs a check now, optionally over a past window and without sending.
 - **Cost:** each check is a short research run with a hard budget of 8 searches and page reads (about 30–50k tokens), so `watch: 6h` costs several times one weekly run. Use `12h` or `24h` for slow topics.
 
 A digest without `watch:` keeps working on request. To run those on a schedule, trigger runs from anywhere that has the repo and `.env`, e.g. cron on a machine you control:
 
 ```cron
-0 7 * * 1  cd /path/to/ai-digest && npm run digests -- run ai-swe
-0 8 * * 4  cd /path/to/ai-digest && npm run digests -- run agent-memory
+0 7 * * 1  cd /path/to/ai-digest && ai-digest run ai-swe
+0 8 * * 4  cd /path/to/ai-digest && ai-digest run agent-memory
 ```
 
 Or call the API directly, which only needs the function URL and the operator token:
@@ -225,12 +228,12 @@ Your function's address looks like `https://ai-digest-xxxx.telnyxcompute.com`. T
    telnyx-edge domains cert upload digest.example.com --cert fullchain.pem --key privkey.pem
    ```
    Let's Encrypt certificates last 90 days, so renew and upload again before they expire.
-3. Set `PUBLIC_URL=https://digest.example.com` in `.env` and run `npm run deploy`. New emails, the digests page and sign-in links use the domain, and the deploy declares it in the function's manifest (`[[domains]]` in `.edge/telnyx.toml`). The `…telnyxcompute.com` address keeps working, so links in older emails do too.
+3. Set `PUBLIC_URL=https://digest.example.com` in `.env` and run `ai-digest deploy`. New emails, the digests page and sign-in links use the domain, and the deploy declares it in the function's manifest (`[[domains]]` in `.edge/telnyx.toml`). The `…telnyxcompute.com` address keeps working, so links in older emails do too.
 
 ## Updating
 
 ```sh
-git pull && npm install && npm run deploy
+git pull && npm install && ai-digest deploy
 ```
 
 Each ship is a new revision (`telnyx-edge revisions list ai-digest`). Votes, sent issues, digest definitions and memory carry over.
@@ -239,9 +242,9 @@ Each ship is a new revision (`telnyx-edge revisions list ai-digest`). Votes, sen
 
 | Symptom | Likely cause and fix |
 |---|---|
-| `npm run digests` says `401 … operator token` | `AGENT_AUTH_KEY` in `.env` doesn't match the function's secret. Run `npm run deploy` to store it again. |
+| `ai-digest` says `401 … operator token` | `AGENT_AUTH_KEY` in `.env` doesn't match the function's secret. Run `ai-digest deploy` to store it again. |
 | `push` says `✗ <id>: …` | The definition has a mistake; the message names the setting. |
-| `run` says `no digest "<id>"` | Push it first: `npm run digests -- push <id>`. |
+| `run` says `no digest "<id>"` | Push it first: `ai-digest push <id>`. |
 | `ask` says `invalid_run` | The topic is empty or over 200 characters, or `--window`/`--items` is out of range (1–90 days, 1–30 items). |
 | No email after a run | `telnyx-edge actors logs AiDigest --type runtime`: look for `digestEmail` and `missing secrets`. Check the sender's domain is verified. (`telnyx-edge logs ai-digest` shows the function's own requests.) |
 | Email lands in spam or fails DMARC | Check the domain shows ownership, DKIM and SPF **verified**, and that there's only one SPF record. |
@@ -250,4 +253,4 @@ Each ship is a new revision (`telnyx-edge revisions list ai-digest`). Votes, sen
 
 ## Upgrading from 0.1.x
 
-0.1.x was deployed with `telnyx-acp`. `npm run deploy` in 0.2.0 keeps the same function: it reads the old `agent.json` deploy data once, saves it to `.edge/function.json`, and moves the operator key into `.env`. After that you can delete `agent.json`. The old feedback links (`/agents/ai-digest/feedback`) keep working. Votes from before 0.2.0 count toward the `ai-swe` digest.
+0.1.x was deployed with `telnyx-acp`. `ai-digest deploy` in 0.2.0 keeps the same function: it reads the old `agent.json` deploy data once, saves it to `.edge/function.json`, and moves the operator key into `.env`. After that you can delete `agent.json`. The old feedback links (`/agents/ai-digest/feedback`) keep working. Votes from before 0.2.0 count toward the `ai-swe` digest.

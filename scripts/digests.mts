@@ -1,4 +1,4 @@
-// npm run digests -- <command>
+// ai-digest <command>
 //
 //   list                         digests stored on the agent, and the built-in General one
 //   push [id…]                   upload digests/<id>.md (all when no ids), validated first
@@ -47,7 +47,7 @@ async function main() {
   switch (cmd) {
     case "list": {
       const list = await agentApi(env, "GET", "/v1/digests");
-      if (!list.length) return console.log("No digests stored yet. Add one to digests/ and run: npm run digests -- push");
+      if (!list.length) return console.log("No digests stored yet. Add one to digests/ and run: ai-digest push");
       for (const d of list) {
         if (d.builtIn) {
           console.log(`${d.id.padEnd(22)} ${"General: any topic, on demand (ask)".padEnd(48)} ${String(d.windowDays).padStart(2)}d  ${`${d.items.min}-${d.items.max} items`.padEnd(11)} built in`);
@@ -86,12 +86,12 @@ async function main() {
       return;
     }
     case "show": {
-      if (!rest[0]) fail("Usage: npm run digests -- show <id>");
+      if (!rest[0]) fail("Usage: ai-digest show <id>");
       process.stdout.write((await agentApi(env, "GET", `/v1/digests/${rest[0]}`)).markdown);
       return;
     }
     case "delete": {
-      if (!rest[0]) fail("Usage: npm run digests -- delete <id>");
+      if (!rest[0]) fail("Usage: ai-digest delete <id>");
       console.log(JSON.stringify(await agentApi(env, "DELETE", `/v1/digests/${rest[0]}`)));
       return;
     }
@@ -99,13 +99,13 @@ async function main() {
       const runName = flag("--run");
       const fromPool = has("--from-pool");
       const [id, ...focus] = rest;
-      if (!id) fail("Usage: npm run digests -- run <id> [focus for this issue] [--run <name>] [--from-pool]");
+      if (!id) fail("Usage: ai-digest run <id> [focus for this issue] [--run <name>] [--from-pool]");
       const r = await agentApi(env, "POST", `/v1/digests/${id}/runs`, { ...(runName ? { run: runName } : {}), ...(focus.length ? { message: focus.join(" ") } : {}), ...(fromPool ? { check: false } : {}) });
       if (r.ok === false) fail(r.error);
       if (r.mode === "check-then-write") console.log(`Started a check for ${r.digest} (${r.conversation}); an issue is written from the pool when it's done.`);
-      else if (r.mode === "from-pool") console.log(`Writing ${r.digest} from its pool now; follow it with: npm run digests -- pool ${r.digest}`);
+      else if (r.mode === "from-pool") console.log(`Writing ${r.digest} from its pool now; follow it with: ai-digest pool ${r.digest}`);
       else console.log(`Started ${r.digest} in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
-      if (r.conversation) console.log(`Follow it: npm run digests -- status ${r.conversation}`);
+      if (r.conversation) console.log(`Follow it: ai-digest status ${r.conversation}`);
       return;
     }
     case "ask": {
@@ -113,10 +113,10 @@ async function main() {
       const window = flag("--window");
       const items = flag("--items");
       const topic = rest.join(" ").trim();
-      if (!topic) fail('Usage: npm run digests -- ask "<topic>" [--window 14d] [--items 5-8] [--run <name>]');
+      if (!topic) fail('Usage: ai-digest ask "<topic>" [--window 14d] [--items 5-8] [--run <name>]');
       const r = await agentApi(env, "POST", "/v1/runs", { topic, ...(window ? { window } : {}), ...(items ? { items } : {}), ...(runName ? { run: runName } : {}) });
       console.log(`Started a General digest on "${r.topic}" in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
-      console.log(`Follow it: npm run digests -- status ${r.conversation}`);
+      console.log(`Follow it: ai-digest status ${r.conversation}`);
       return;
     }
     case "watch": {
@@ -124,16 +124,16 @@ async function main() {
       const until = flag("--until");
       const noSend = has("--no-send");
       const id = rest[0];
-      if (!id) fail("Usage: npm run digests -- watch <id> [--since 2026-11-02] [--until 2026-11-04] [--no-send]");
+      if (!id) fail("Usage: ai-digest watch <id> [--since 2026-11-02] [--until 2026-11-04] [--no-send]");
       const r = await agentApi(env, "POST", `/v1/digests/${id}/check`, { ...(since ? { since } : {}), ...(until ? { until } : {}), ...(noSend ? { decide: false } : {}) }).catch((e: Error) => fail(e.message));
       if (r.ok === false) fail(`${r.error}${r.conversation ? ` (${r.conversation})` : ""}`);
       console.log(`Check started in ${r.conversation}, ${r.since.slice(0, 16)} → ${r.until.slice(0, 16)} UTC.${noSend ? " It only fills the pool." : ""}`);
-      console.log(`Then: npm run digests -- pool ${id}`);
+      console.log(`Then: ai-digest pool ${id}`);
       return;
     }
     case "pool": {
       const id = rest[0];
-      if (!id) fail("Usage: npm run digests -- pool <id>");
+      if (!id) fail("Usage: ai-digest pool <id>");
       const v = await agentApi(env, "GET", `/v1/digests/${id}/pool`);
       const t = (iso: string | null) => (iso ? iso.slice(0, 16).replace("T", " ") + " UTC" : "—");
       if (!v.watch) console.log(`${id} doesn't watch (no "watch:" in its definition).`);
@@ -147,7 +147,7 @@ async function main() {
       return;
     }
     case "status": {
-      if (!rest[0]) fail("Usage: npm run digests -- status <conversation>");
+      if (!rest[0]) fail("Usage: ai-digest status <conversation>");
       const s = await agentApi(env, "GET", `/v1/runs/${rest[0]}`);
       if (!s.runs?.length) return console.log("No runs yet in that conversation.");
       for (const r of s.runs) {

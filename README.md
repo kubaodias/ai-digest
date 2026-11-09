@@ -14,7 +14,7 @@ It runs entirely on Telnyx: Edge Compute for hosting and durable state, Telnyx I
 
 - **Digests you define.** One file per digest, e.g. `digests/agent-memory.md`, with its title, topic and audience, sources, time window, length and closing section. Your digests stay private: the folder is git-ignored and stored on your own function.
 - **Watches its topic** when a digest has `watch: 6h`: short checks keep a pool of candidate stories, and an issue goes out when enough strong ones have gathered, or after `max_gap` at the latest. Stories that several sources cover, or that keep coming back, rank higher; an issue lists up to 3 sources per story and at most 2 stories about the same product.
-- **One-off digests on any topic**, on demand: `npm run digests -- ask "agent harnesses"`. A built-in General digest fills its template with your topic; no file needed.
+- **One-off digests on any topic**, on demand: `ai-digest ask "agent harnesses"`. A built-in General digest fills its template with your topic; no file needed.
 - **Researches** each issue with about 25 web searches and page reads (a watching digest spreads that over its checks and writes the issue from its pool), using only items from the requested window and linking to the specific articles.
 - **Illustrates** items with pictures from the source articles, only when a vision model judges them informative for that digest's reader: charts, diagrams, product screenshots.
 - **Emails** every finished digest from your own domain, to the digest's recipients. Sending is done by code, not left to the model.
@@ -33,7 +33,7 @@ It runs entirely on Telnyx: Edge Compute for hosting and durable state, Telnyx I
 
 ```markdown
 ---
-title: "Agent Memory Weekly — {range}"
+title: "Agent Memory — {range}"
 window: 14d
 items: 5-10
 closing: Takeaways
@@ -52,12 +52,12 @@ APIs and services, memory architectures, retrieval and context management.
 Examples to copy: [`examples/digests/`](examples/digests). All settings are described in [docs/SETUP.md](docs/SETUP.md#5-define-your-digests), watching in [step 9](docs/SETUP.md#9-let-a-digest-watch-its-topic).
 
 ```sh
-npm run digests -- push               # upload digests/*.md to your function
-npm run digests -- run agent-memory   # an issue now (3–5 minutes, then it's emailed)
-npm run digests -- pool agent-memory  # a watching digest's pool: candidates, next check, why no issue yet
-npm run digests -- watch agent-memory # a check now (it only adds to the pool)
-npm run digests -- ask "agent harnesses"   # a one-off digest on any topic
-npm run digests -- list
+ai-digest push                    # upload digests/*.md to your function
+ai-digest run agent-memory        # an issue now (3–5 minutes, then it's emailed)
+ai-digest pool agent-memory       # a watching digest's pool: candidates, next check, why no issue yet
+ai-digest watch agent-memory      # a check now (it only adds to the pool)
+ai-digest ask "agent harnesses"   # a one-off digest on any topic
+ai-digest list
 ```
 
 Then open `https://<your function>/v1/app` and sign in with the link it emails you.
@@ -66,7 +66,7 @@ Then open `https://<your function>/v1/app` and sign in with the link it emails y
 
 ```mermaid
 flowchart LR
-  CLI[npm run digests] -->|"/v1 API, operator token"| R
+  CLI[ai-digest] -->|"/v1 API, operator token"| R
   subgraph EC[Telnyx Edge Compute: your function]
     R[v1 router]
     D[digests actor<br/>definitions]
@@ -98,9 +98,9 @@ About 30 minutes, most of it waiting for DNS. The full guide with links is **[do
 
 1. [Create a Telnyx account](https://telnyx.com/sign-up) and an [API key](https://developers.telnyx.com/development/api-fundamentals/create-api-keys); install the [Edge Compute CLI](https://developers.telnyx.com/docs/edge-compute/platform-overview) (`telnyx-edge`).
 2. [Verify a sending domain](https://developers.telnyx.com/docs/messaging/email/domains) in Telnyx Email (ownership, DKIM and SPF records).
-3. Clone, `npm install`, `cp .env.example .env` and set your sender and recipient.
+3. Clone, `npm install`, `npm link` (installs the `ai-digest` command), `cp .env.example .env` and set your sender and recipient.
 4. Copy a digest from `examples/digests/` into `digests/` and edit it.
-5. `npm run deploy`, then `npm run digests -- run <digest>`.
+5. `ai-digest deploy`, then `ai-digest run <digest>`.
 
 ## Project layout
 
@@ -119,24 +119,25 @@ About 30 minutes, most of it waiting for DNS. The full guide with links is **[do
 | `examples/digests/` | Digest definitions to copy (your own go in the git-ignored `digests/`) |
 | `docs/memory-summary-instructions.md` | How Agent Memory summarises a digest reader's interests |
 | `docs/spec/` | Decision records and design specs, numbered |
+| `bin/ai-digest.mjs` | The `ai-digest` command (`npm link`): one entry point for the scripts below, from any folder |
 | `scripts/` | `deploy`, `digests`, `release`, `screenshots` |
 | `test/` | Regression tests (`npm test`) |
 
 ## Development
 
 ```sh
-npm install
+npm install && npm link           # npm link: the ai-digest command, once
 npm test                         # node:test, no network
-npm run screenshots              # regenerate docs/images from scripts/fixtures (needs Chrome)
-npm run deploy                   # tests, secrets, build, ship, push digests
-npm run release -- minor         # bump version, date the changelog, commit and tag
+ai-digest screenshots            # regenerate docs/images from scripts/fixtures (needs Chrome)
+ai-digest deploy                 # tests, secrets, build, ship, push digests
+ai-digest release minor          # bump version, date the changelog, commit and tag
 ```
 
 Requires Node.js 23.6 or newer (it runs TypeScript directly) and the [`telnyx-edge`](https://developers.telnyx.com/docs/edge-compute/platform-overview) CLI.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The HTTP API is versioned in its path (`/v1`). Changes are listed in [CHANGELOG.md](CHANGELOG.md); add yours under *Unreleased*, and `npm run release` dates them.
+[Semantic versioning](https://semver.org). The HTTP API is versioned in its path (`/v1`). Changes are listed in [CHANGELOG.md](CHANGELOG.md); add yours under *Unreleased*, and `ai-digest release` dates them.
 
 ## License
 

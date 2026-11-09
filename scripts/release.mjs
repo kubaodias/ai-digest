@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// npm run release -- patch|minor|major [--deploy]
+// ai-digest release patch|minor|major [--deploy]
 //
 // Cuts a semver release: requires a clean git tree, passing tests and entries
 // under "## [Unreleased]" in CHANGELOG.md; bumps package.json, moves the
 // Unreleased entries under the new version with today's date, commits
 // "Release vX.Y.Z" and tags vX.Y.Z. It doesn't push. With --deploy it then
-// runs npm run deploy.
+// runs ai-digest deploy.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { root, run, say } from "./lib.mjs";

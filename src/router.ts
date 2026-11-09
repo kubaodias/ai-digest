@@ -27,7 +27,7 @@ import { GENERAL_TEMPLATE } from "./general.ts";
 import { app } from "./app.ts";
 import { parseRecipients } from "./config.ts";
 
-export const VERSION = "0.5.1";
+export const VERSION = "0.6.0";
 export const FEEDBACK_ACTOR = "feedback";
 export const DIGESTS_ACTOR = "digests";
 
@@ -158,7 +158,7 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
   // Everything else needs the operator token.
   if (!path.startsWith("/v1/")) return json(404, { error: "not_found", message: "see /v1/health; the API lives under /v1" });
   if (!(await mayUseFrontDoor(req, await secret(env as any, SECRET.authKey)))) {
-    return json(401, { error: "unauthorized", message: "send the operator token: Authorization: Bearer <token> (npm run digests does)" });
+    return json(401, { error: "unauthorized", message: "send the operator token: Authorization: Bearer <token> (ai-digest does)" });
   }
 
   const parts = path.split("/").slice(2); // after "/v1"
@@ -167,7 +167,7 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
       const id = parts[1];
       if (id === GENERAL_ID) {
         if (parts.length === 2 && method === "GET") return json(200, { id, builtIn: true, markdown: GENERAL_TEMPLATE });
-        return json(400, { error: "built_in", message: `"${GENERAL_ID}" is the built-in General digest: it can't be stored or deleted; start one with POST /v1/runs {"topic": "…"} (npm run digests -- ask "<topic>")` });
+        return json(400, { error: "built_in", message: `"${GENERAL_ID}" is the built-in General digest: it can't be stored or deleted; start one with POST /v1/runs {"topic": "…"} (ai-digest ask "<topic>")` });
       }
       if (id !== undefined && !ID_PATTERN.test(id)) return json(400, { error: "bad_id", message: "ids are lowercase letters, digits and single dashes" });
       if (!id && method === "GET") return json(200, [...(await actor(DIGESTS_ACTOR).listDigests()), generalSummary()]);
@@ -219,7 +219,7 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
       }
       if (id && parts[2] === "runs" && parts.length === 3 && method === "POST") {
         const d = await actor(DIGESTS_ACTOR).getDigest(id);
-        if (!d) return json(404, { error: "not_found", message: `no digest "${id}": push it first (npm run digests -- push)` });
+        if (!d) return json(404, { error: "not_found", message: `no digest "${id}": push it first (ai-digest push)` });
         const body = await req.json().catch(() => ({}));
         // A watching digest writes from its pool: after a fresh check (default), or right away with "check": false.
         if (parseProfile(id, d.markdown).watch) {

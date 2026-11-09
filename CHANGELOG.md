@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-09
+
+### Added
+
+- The `ai-digest` command (`npm link` once): `ai-digest list`, `run`, `watch`, `pool`, `ask`, `deploy`, `release` and the rest, from any folder, instead of `npm run digests -- …`; `ai-digest help` lists them. The npm scripts still work. Docs, CLI messages and the digests page use the new form.
+
+### Changed
+
+- The example Agent Memory digest is titled "Agent Memory — {range}" instead of "Agent Memory Weekly": a watching digest goes out when there's enough to read, not on a weekly beat.
+
 ## [0.5.1] - 2026-11-09
 
 ### Changed

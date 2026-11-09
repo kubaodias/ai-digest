@@ -75,7 +75,7 @@ test("conversation names carry the digest", () => {
 test("the run message carries the definition and the issue's focus", () => {
   const p = parseProfile("agent-memory", example("agent-memory"));
   const m = runMessage(p, "anything about MCP memory servers");
-  assert.match(m, /Title: Agent Memory Weekly — <the date range you cover>/);
+  assert.match(m, /Title: Agent Memory — <the date range you cover>/);
   assert.match(m, /Time window: the last 14 days\./);
   assert.match(m, /Items: 5–10, most important first/);
   assert.match(m, /Closing section: "## Takeaways"/);

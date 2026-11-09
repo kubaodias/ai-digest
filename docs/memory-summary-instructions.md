@@ -1,4 +1,4 @@
-<!-- Applied to the ai-digest Agent Memory namespace by `npm run deploy` (PATCH /v2/ai/memory/namespaces/ai-digest/settings, summary.instructions). Everything after this comment is sent as-is. -->
+<!-- Applied to the ai-digest Agent Memory namespace by `ai-digest deploy` (PATCH /v2/ai/memory/namespaces/ai-digest/settings, summary.instructions). Everything after this comment is sent as-is. -->
 Write a profile of this reader's content interests, used to rank items in a news digest. Build it only from their recorded feedback.
 
 Include only:
