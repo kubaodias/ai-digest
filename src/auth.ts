@@ -28,7 +28,7 @@ function sameSecret(a: string, b: string): boolean {
 /**
  * The claims for a caller. With no auth key configured the agent stays open
  * (the managed default), so a deployment without the secret isn't locked out;
- * `npm run deploy` always configures one.
+ * `ai-digest deploy` always configures one.
  */
 export async function claimsFor(token: string | undefined, key: string | undefined): Promise<Claim[]> {
   if (!key) return ["read", "rpc"];

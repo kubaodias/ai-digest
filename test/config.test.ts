@@ -38,6 +38,6 @@ test("the feedback URL is built from the public URL", () => {
 
 test("the memory summary instructions fit Agent Memory's 2000-character limit", () => {
   const md = readFileSync(new URL("../docs/memory-summary-instructions.md", import.meta.url), "utf8");
-  const sent = md.replace(/^<!--[\s\S]*?-->\s*/, "").trim(); // what npm run deploy sends
+  const sent = md.replace(/^<!--[\s\S]*?-->\s*/, "").trim(); // what ai-digest deploy sends
   assert.ok(sent.length <= 2000, `${sent.length} characters`);
 });

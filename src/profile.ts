@@ -41,7 +41,7 @@ export const DEFAULTS = { windowDays: 7, items: { min: 5, max: 15 }, closing: "T
 export const ID_PATTERN = /^[a-z0-9](?:[a-z0-9]|-(?!-))*[a-z0-9]$|^[a-z0-9]$/;
 
 /**
- * The built-in on-demand digest (`npm run digests -- ask "<topic>"`). Its id
+ * The built-in on-demand digest (`ai-digest ask "<topic>"`). Its id
  * starts with "_", which ID_PATTERN never allows, so no stored digest can take
  * it. Its votes, preferences and Agent Memory profile use this id too.
  */

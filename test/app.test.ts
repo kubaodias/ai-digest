@@ -175,7 +175,7 @@ test("the General page: how to ask, the template, its issues, what it learned, i
   assert.equal(r.status, 200);
   const html = await r.text();
   assert.match(html, /<h1>General<\/h1>/);
-  assert.match(html, /npm run digests -- ask/);
+  assert.match(html, /ai-digest ask/);
   assert.match(html, /would like to get information about \{topic\}/, "the template");
   assert.match(html, /Agent harnesses — 2–9 November 2026/);
   assert.match(html, /profile __general/);

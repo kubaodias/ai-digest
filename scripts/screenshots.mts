@@ -2,8 +2,8 @@
 // Offline (no Telnyx API calls): renders the email and a feedback page on a local
 // server and photographs them with Chrome.
 //
-//   npm run screenshots              # Chrome at the default macOS path
-//   CHROME_PATH=/usr/bin/chromium npm run screenshots
+//   ai-digest screenshots              # Chrome at the default macOS path
+//   CHROME_PATH=/usr/bin/chromium ai-digest screenshots
 
 import http from "node:http";
 import { readFile } from "node:fs/promises";

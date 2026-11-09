@@ -1,5 +1,5 @@
 ---
-title: "Agent Memory Weekly — {range}"
+title: "Agent Memory — {range}"
 window: 14d
 items: 5-10
 closing: Takeaways

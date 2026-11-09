@@ -9,6 +9,9 @@
     "url": "https://github.com/kubaodias/ai-digest.git"
   },
   "type": "module",
+  "bin": {
+    "ai-digest": "bin/ai-digest.mjs"
+  },
   "scripts": {
     "test": "node --test test/",
     "deploy": "node scripts/deploy.mjs",

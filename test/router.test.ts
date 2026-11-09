@@ -45,7 +45,7 @@ test("public routes: health, icons, signed feedback pages (v1 and the pre-0.2.0 
   const { env, calls } = fakeEnv();
   const health = await route(req("/v1/health"), env);
   assert.equal(health.status, 200);
-  assert.equal((await health.json()).version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, "/v1/health reports package.json's version (npm run release keeps them in step)");
+  assert.equal((await health.json()).version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, "/v1/health reports package.json's version (ai-digest release keeps them in step)");
   const icon = await route(req("/v1/assets/thumb-up.png"), env);
   assert.equal(icon.headers.get("content-type"), "image/png");
   await route(req("/v1/feedback?p=x&s=y"), env);

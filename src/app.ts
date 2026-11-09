@@ -133,7 +133,7 @@ function settings(p: DigestProfile): string {
       "Watching",
       p.watch
         ? `checks every ${p.watch.watchHours} h · an issue at ${p.watch.sendAt} stories scoring ${p.watch.strong}+ (at most every ${p.watch.minGapDays} d), at least every ${p.watch.maxGapDays} d`
-        : "off: issues on request (npm run digests -- run)",
+        : "off: issues on request (ai-digest run)",
     ],
   ];
   return `<table class="kv">${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</table>`;
@@ -157,21 +157,21 @@ export function checkInboxPage(address: string): Response {
   return page("Check your inbox", `<div class="card"><h2>Check your inbox</h2><p class="muted">A sign-in link is on its way to ${esc(maskEmail(address))}. It works once, for ${MAGIC_MINUTES} minutes.</p></div>`, 200, { css });
 }
 
-/** The built-in General digest's card: one-off topics, asked for with `npm run digests -- ask`. */
+/** The built-in General digest's card: one-off topics, asked for with `ai-digest ask`. */
 function generalCard(overview: Overview, memory: Record<string, number>): string {
   const mine = overview.issues.filter((i) => i.profile === GENERAL_ID);
   const topics = [...new Set(mine.map((i) => i.topic).filter(Boolean))].slice(0, 3) as string[];
   return `<a class="card" href="${APP}/digests/${GENERAL_ID}" style="text-decoration:none;color:inherit">
   <span class="id">built in · on demand</span>
   <h2>General</h2>
-  <span class="muted" style="font-size:14px">${topics.length ? `Recent: ${topics.map(esc).join(", ")}` : `Any topic: <code>npm run digests -- ask "…"</code>`}</span>
+  <span class="muted" style="font-size:14px">${topics.length ? `Recent: ${topics.map(esc).join(", ")}` : `Any topic: <code>ai-digest ask "…"</code>`}</span>
   <span class="faint">${mine[0] ? `Last issue ${date(mine[0].sentAt)} · ${plural(mine.length, "issue")}` : "No issues yet"}</span>
   <span class="faint">${plural(overview.votes[GENERAL_ID] ?? 0, "vote")} · ${plural(memory[GENERAL_ID] ?? 0, "memory", "memories")}</span>
 </a>`;
 }
 
 export function listPage(digests: DigestSummary[], overview: Overview, memory: Record<string, number>): Response {
-  const empty = digests.length ? "" : `<div class="card"><p class="muted">No digests of your own yet. Add a file to <code>digests/</code> and run <code>npm run digests -- push</code>.</p></div>`;
+  const empty = digests.length ? "" : `<div class="card"><p class="muted">No digests of your own yet. Add a file to <code>digests/</code> and run <code>ai-digest push</code>.</p></div>`;
   const cards = digests
     .map((d) => {
       const last = overview.issues.find((i) => i.profile === d.id);
@@ -250,7 +250,7 @@ export function digestPage(d: DigestPageData): Response {
     list.length ? list.map((x) => `<span class="pill ${x.direction}">${x.direction === "more" ? "↑" : "↓"} ${esc(x.name)} · ${x.votes}</span>`).join("") : `<span class="faint">none yet</span>`;
   const issues = d.issues.length
     ? `<table class="kv">${d.issues.map(({ issue, view }) => `<tr><td>${date(issue.sentAt)}</td><td>${view ? `<a href="${esc(view)}">${esc(issue.subject)}</a>` : esc(issue.subject)} <span class="faint">· ${issue.items} items</span></td></tr>`).join("")}</table>`
-    : `<p class="faint">No issues sent yet. Start one: <code>npm run digests -- run ${esc(d.digest.id)}</code></p>`;
+    : `<p class="faint">No issues sent yet. Start one: <code>ai-digest run ${esc(d.digest.id)}</code></p>`;
   const title = p ? p.title.replace("{range}", "…").replace(/\s*—\s*…$/, "") : d.digest.id;
   return page(
     title,
@@ -286,9 +286,9 @@ export function generalPage(d: GeneralPageData): Response {
     list.length ? list.map((x) => `<span class="pill ${x.direction}">${x.direction === "more" ? "↑" : "↓"} ${esc(x.name)} · ${x.votes}</span>`).join("") : `<span class="faint">none yet</span>`;
   const issues = d.issues.length
     ? `<table class="kv">${d.issues.map(({ issue, view }) => `<tr><td>${date(issue.sentAt)}</td><td>${view ? `<a href="${esc(view)}">${esc(issue.subject)}</a>` : esc(issue.subject)} <span class="faint">· ${issue.items} items</span></td></tr>`).join("")}</table>`
-    : `<p class="faint">No one-off digests yet. Ask for one: <code>npm run digests -- ask "agent harnesses"</code></p>`;
+    : `<p class="faint">No one-off digests yet. Ask for one: <code>ai-digest ask "agent harnesses"</code></p>`;
   const rows: [string, string][] = [
-    ["Start one", `<code>npm run digests -- ask "&lt;topic&gt;" [--window 14d] [--items 5-8]</code>`],
+    ["Start one", `<code>ai-digest ask "&lt;topic&gt;" [--window 14d] [--items 5-8]</code>`],
     ["Title", esc(p.title)],
     ["Time window", `${p.windowDays} days, unless the request says otherwise`],
     ["Items", `${p.items.min}–${p.items.max}, unless the request says otherwise`],

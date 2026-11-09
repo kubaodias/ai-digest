@@ -1,4 +1,4 @@
-// The function's entry point, shipped with `telnyx-edge` (npm run deploy).
+// The function's entry point, shipped with `telnyx-edge` (ai-digest deploy).
 // The runtime imports the actor class from here by name; every HTTP request
 // goes through the v1 router.
 

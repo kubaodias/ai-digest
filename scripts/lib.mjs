@@ -83,13 +83,13 @@ export function operatorToken(key) {
 /** The function's public URL: PUBLIC_URL in .env, else what the last deploy recorded. */
 export function publicUrl(env) {
   const url = env.PUBLIC_URL || readState().publicUrl;
-  if (!url) throw new Error("The agent's URL isn't known yet: run `npm run deploy` first.");
+  if (!url) throw new Error("The agent's URL isn't known yet: run `ai-digest deploy` first.");
   return url.replace(/\/+$/, "");
 }
 
 /** A call to the agent's v1 API with the operator token. */
 export async function agentApi(env, method, path, body, { raw = false } = {}) {
-  if (!env.AGENT_AUTH_KEY) throw new Error("No AGENT_AUTH_KEY in .env: run `npm run deploy` (it creates one).");
+  if (!env.AGENT_AUTH_KEY) throw new Error("No AGENT_AUTH_KEY in .env: run `ai-digest deploy` (it creates one).");
   const r = await fetch(publicUrl(env) + path, {
     method,
     headers: { Authorization: `Bearer ${operatorToken(env.AGENT_AUTH_KEY)}`, ...(raw ? { "Content-Type": "text/markdown" } : body !== undefined ? { "Content-Type": "application/json" } : {}) },

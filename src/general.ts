@@ -1,5 +1,5 @@
 // The built-in General digest's definition: a template for one-off digests on
-// any topic (`npm run digests -- ask "<topic>"`, POST /v1/runs). Same format as
+// any topic (`ai-digest ask "<topic>"`, POST /v1/runs). Same format as
 // a digest file (profile.ts). {topic} is filled in after parsing, in the title
 // and the description only; {range} is the dates covered, as in any title.
 // Edit the wording here; the defaults (window, items) can be overridden per run.
