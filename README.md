@@ -13,9 +13,9 @@ It runs entirely on Telnyx: Edge Compute for hosting and durable state, Telnyx I
 ## What it does
 
 - **Digests you define.** One file per digest, e.g. `digests/agent-memory.md`, with its title, topic and audience, sources, time window, length and closing section. Your digests stay private: the folder is git-ignored and stored on your own function.
-- **Scouts on its own** when a digest has `scout: 6h`: short research passes keep a pool of candidate stories, and an issue goes out when enough strong ones have gathered, or after `max_gap` at the latest. Stories that several sources cover, or that keep coming back, rank higher.
+- **Watches its topic** when a digest has `watch: 6h`: short checks keep a pool of candidate stories, and an issue goes out when enough strong ones have gathered, or after `max_gap` at the latest. Stories that several sources cover, or that keep coming back, rank higher; an issue lists up to 3 sources per story and at most 2 stories about the same product.
 - **One-off digests on any topic**, on demand: `npm run digests -- ask "agent harnesses"`. A built-in General digest fills its template with your topic; no file needed.
-- **Researches** each issue with about 25 web searches and page reads, using only items from the requested window and linking to the specific articles.
+- **Researches** each issue with about 25 web searches and page reads (a watching digest spreads that over its checks and writes the issue from its pool), using only items from the requested window and linking to the specific articles.
 - **Illustrates** items with pictures from the source articles, only when a vision model judges them informative for that digest's reader: charts, diagrams, product screenshots.
 - **Emails** every finished digest from your own domain, to the digest's recipients. Sending is done by code, not left to the model.
 - **Shows your digests on a page** at `/v1/app` on your function, behind a magic-link sign-in: each digest's settings and description, its recent issues, what it learned from your votes, and its Agent Memory summary.
@@ -37,6 +37,7 @@ title: "Agent Memory Weekly — {range}"
 window: 14d
 items: 5-10
 closing: Takeaways
+watch: 12h          # optional: check for news every 12 hours, send when enough is worth reading
 ---
 Memory systems for AI agents, for an engineer building agents: long-term memory
 APIs and services, memory architectures, retrieval and context management.
@@ -48,11 +49,13 @@ APIs and services, memory architectures, retrieval and context management.
 - Chatbot launches with no memory angle.
 ```
 
-Examples to copy: [`examples/digests/`](examples/digests). All settings are described in [docs/SETUP.md](docs/SETUP.md#5-define-your-digests).
+Examples to copy: [`examples/digests/`](examples/digests). All settings are described in [docs/SETUP.md](docs/SETUP.md#5-define-your-digests), watching in [step 9](docs/SETUP.md#9-let-a-digest-watch-its-topic).
 
 ```sh
 npm run digests -- push               # upload digests/*.md to your function
-npm run digests -- run agent-memory   # start an issue now (3–5 minutes, then it's emailed)
+npm run digests -- run agent-memory   # an issue now (3–5 minutes, then it's emailed)
+npm run digests -- pool agent-memory  # a watching digest's pool: candidates, next check, why no issue yet
+npm run digests -- watch agent-memory # a check now (it only adds to the pool)
 npm run digests -- ask "agent harnesses"   # a one-off digest on any topic
 npm run digests -- list
 ```
@@ -67,11 +70,15 @@ flowchart LR
   subgraph EC[Telnyx Edge Compute: your function]
     R[v1 router]
     D[digests actor<br/>definitions]
-    A["run actors<br/>one per issue: &lt;digest&gt;--&lt;run&gt;"]
+    A["run actors<br/>one per issue or check"]
+    P["pool actors<br/>&lt;digest&gt;--pool: candidates,<br/>timer, when to send"]
     F[feedback actor<br/>votes + sent issues]
   end
   R --> D
   R -->|start run| A
+  P -->|"every watch: interval, a check"| A
+  A -->|candidates| P
+  P -->|"enough strong stories: write an issue"| A
   A -->|research| WS[Web Search]
   A -->|write| LLM[Inference<br/>DeepSeek V4.1 Flash]
   A -->|pick pictures| V[Inference<br/>Qwen3.8 vision]
@@ -83,7 +90,7 @@ flowchart LR
   A -->|reader_preferences| F
 ```
 
-The function has its own entry point and a versioned HTTP API (`/v1/…`). See [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) for the API, the research loop, picture selection, signed feedback links, how votes become preferences, and what's stored where.
+The function has its own entry point and a versioned HTTP API (`/v1/…`). See [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) for the API, the research loop, watching digests and their pools, picture selection, signed feedback links, how votes become preferences, and what's stored where.
 
 ## Set it up on your Telnyx account
 
@@ -100,15 +107,18 @@ About 30 minutes, most of it waiting for DNS. The full guide with links is **[do
 | Path | What it is |
 |---|---|
 | `src/index.ts`, `src/router.ts` | The function's entry point and its v1 HTTP API |
-| `src/agent.ts` | The agent: research loop, deterministic email delivery, the `feedback` and `digests` actors, the email template |
+| `src/agent.ts` | The agent: research loop, deterministic email delivery, the `feedback`, `digests` and pool actors, the email template |
 | `src/profile.ts` | Parsing digest definitions and turning one into a run's request |
 | `src/instructions.ts` | How to research and write any digest |
+| `src/pool.ts`, `src/watch-instructions.ts` | Watching: the candidate pool, scores, when to send; the check and issue-writing requests |
+| `src/general.ts` | The built-in General digest's template (one-off topics) |
 | `src/images.ts` | Picking pictures from the source articles |
 | `src/feedback.ts`, `src/preferences.ts` | Signed thumbs links, the feedback pages, votes into preferences |
 | `src/app.ts` | The digests page and its magic-link sign-in |
 | `src/config.ts`, `src/auth.ts` | Settings from Telnyx secrets; the operator token |
 | `examples/digests/` | Digest definitions to copy (your own go in the git-ignored `digests/`) |
 | `docs/memory-summary-instructions.md` | How Agent Memory summarises a digest reader's interests |
+| `docs/spec/` | Decision records and design specs, numbered |
 | `scripts/` | `deploy`, `digests`, `release`, `screenshots` |
 | `test/` | Regression tests (`npm test`) |
 

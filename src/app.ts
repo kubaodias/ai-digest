@@ -87,7 +87,7 @@ export interface DigestSummary {
   title: string | null;
   windowDays: number | null;
   items: { min: number; max: number } | null;
-  scout: DigestProfile["scout"] | null;
+  watch: DigestProfile["watch"] | null;
   updatedAt: string;
   versions: number;
 }
@@ -130,9 +130,9 @@ function settings(p: DigestProfile): string {
     ["Pictures", p.images ? "on" : "off"],
     ["Recipients", p.to.length ? p.to.map(esc).join(", ") : "default (DIGEST_EMAIL_TO)"],
     [
-      "Scouting",
-      p.scout
-        ? `every ${p.scout.scoutHours} h · an issue at ${p.scout.sendAt} stories scoring ${p.scout.strong}+ (at most every ${p.scout.minGapDays} d), at least every ${p.scout.maxGapDays} d`
+      "Watching",
+      p.watch
+        ? `checks every ${p.watch.watchHours} h · an issue at ${p.watch.sendAt} stories scoring ${p.watch.strong}+ (at most every ${p.watch.minGapDays} d), at least every ${p.watch.maxGapDays} d`
         : "off: issues on request (npm run digests -- run)",
     ],
   ];
@@ -175,7 +175,7 @@ export function listPage(digests: DigestSummary[], overview: Overview, memory: R
   const cards = digests
     .map((d) => {
       const last = overview.issues.find((i) => i.profile === d.id);
-      const shape = d.windowDays && d.items ? `${d.windowDays} days · ${d.items.min === d.items.max ? d.items.min : `${d.items.min}–${d.items.max}`} items${d.scout ? ` · scouts every ${d.scout.scoutHours} h` : ""}` : "";
+      const shape = d.windowDays && d.items ? `${d.windowDays} days · ${d.items.min === d.items.max ? d.items.min : `${d.items.min}–${d.items.max}`} items${d.watch ? ` · checks every ${d.watch.watchHours} h` : ""}` : "";
       return `<a class="card" href="${APP}/digests/${d.id}" style="text-decoration:none;color:inherit">
   <span class="id">${esc(d.id)}</span>
   <h2>${d.title ? esc(d.title.replace("{range}", "…").replace(/\s*—\s*…$/, "")) : `<span class="less">Invalid definition</span>`}</h2>
@@ -190,11 +190,11 @@ export function listPage(digests: DigestSummary[], overview: Overview, memory: R
 
 /** What the pool actor's poolView() returns (the parts the page shows). */
 export interface PoolView {
-  scout: { strong: number; sendAt: number; maxGapDays: number } | null;
-  nextPassAt: string | null;
-  lastPassAt: string | null;
-  passes: number;
-  passRunning: { slot: string } | null;
+  watch: { strong: number; sendAt: number; maxGapDays: number } | null;
+  nextCheckAt: string | null;
+  lastCheckAt: string | null;
+  checks: number;
+  checkRunning: { slot: string } | null;
   lastIssueAt: string | null;
   issueRunning: { slot: string } | null;
   lastDecision: { action: string; reason: string; dueBy?: string } | null;
@@ -204,7 +204,7 @@ export interface PoolView {
 
 const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC";
 
-/** The pool card on a scouting digest's page: timing, counts, why no issue yet, the strongest candidates. */
+/** The pool card on a watching digest's page: timing, counts, why no issue yet, the strongest candidates. */
 export function poolCard(v: PoolView): string {
   const d = v.lastDecision;
   const status = v.issueRunning
@@ -213,16 +213,16 @@ export function poolCard(v: PoolView): string {
       ? `No issue yet: ${esc(d.reason)}${d.dueBy ? `. An issue by ${when(d.dueBy)} at the latest.` : "."}`
       : d
         ? `Last decision: ${esc(d.action)} (${esc(d.reason)}).`
-        : "No pass yet.";
+        : "No check yet.";
   const rows = v.entries
     .filter((e) => e.state === "candidate")
     .slice(0, 8)
     .map((e) => `<tr><td class="n" style="text-align:left;padding:0 10px 0 0">${e.score.toFixed(1)}</td><td><a href="${esc(e.url)}">${esc(e.headline)}</a> <span class="faint">· ${esc(e.source)}${e.sources.length > 1 ? ` +${e.sources.length - 1}` : ""}${e.sightings > 1 ? ` · seen ${e.sightings}×` : ""}</span></td></tr>`)
     .join("");
-  return `<div class="card"><p class="label">Scouting · ${v.passes} pass${v.passes === 1 ? "" : "es"}</p>
+  return `<div class="card"><p class="label">Watching · ${v.checks} check${v.checks === 1 ? "" : "s"}</p>
 <table class="kv">
-<tr><td>Pool</td><td>${v.counts.strong} strong (score ${v.scout?.strong ?? 7}+, ${v.scout?.sendAt ?? "?"} needed) · ${v.counts.candidates} candidates · ${v.counts.sent} sent · ${v.counts.expired} expired</td></tr>
-<tr><td>Last pass</td><td>${v.passRunning ? "running now" : v.lastPassAt ? when(v.lastPassAt) : "none yet"}${v.nextPassAt ? ` · next ${when(v.nextPassAt)}` : ""}</td></tr>
+<tr><td>Pool</td><td>${v.counts.strong} strong (score ${v.watch?.strong ?? 7}+, ${v.watch?.sendAt ?? "?"} needed) · ${v.counts.candidates} candidates · ${v.counts.sent} sent · ${v.counts.expired} expired</td></tr>
+<tr><td>Last check</td><td>${v.checkRunning ? "running now" : v.lastCheckAt ? when(v.lastCheckAt) : "none yet"}${v.nextCheckAt ? ` · next ${when(v.nextCheckAt)}` : ""}</td></tr>
 <tr><td>Last issue</td><td>${v.lastIssueAt ? when(v.lastIssueAt) : "none yet"}</td></tr>
 <tr><td>Status</td><td>${status}</td></tr>
 </table>
@@ -313,10 +313,10 @@ ${d.memorySummary ? `<div class="memory">${marked.parse(d.memorySummary, { async
   );
 }
 
-/** Whether a stored definition scouts (an invalid one doesn't). */
-function parseScouting(markdown: string, id: string): boolean {
+/** Whether a stored definition watches (an invalid one doesn't). */
+function parseWatching(markdown: string, id: string): boolean {
   try {
-    return !!parseProfile(id, markdown).scout;
+    return !!parseProfile(id, markdown).watch;
   } catch {
     return false;
   }
@@ -334,7 +334,7 @@ export interface AppDeps {
   digests: { listDigests(): Promise<DigestSummary[]>; getDigest(id: string): Promise<StoredDigest | null>; magicRequested(now: number): Promise<{ ok: boolean; retryIn?: number }>; consumeMagic(nonce: string, exp: number): Promise<boolean> };
   feedback: { appOverview(): Promise<Overview>; feedbackStats(profile: string): Promise<Preferences> };
   memory: { counts(): Promise<Record<string, number>>; summary(profile: string): Promise<string | null> };
-  /** A scouting digest's pool (optional: pages work without it). */
+  /** A watching digest's pool (optional: pages work without it). */
   pool?(id: string): Promise<PoolView | null>;
   sendEmail(to: string, subject: string, text: string, html: string): Promise<void>;
   now?: () => number;
@@ -400,7 +400,7 @@ export async function app(req: Request, deps: AppDeps): Promise<Response> {
       overview.issues.filter((i) => i.profile === id).slice(0, 12).map(async (issue) => ({ issue, view: deps.feedbackKey ? await viewLink(deps.feedbackKey, base, issue.id) : undefined })),
     );
     if (!digest) return generalPage({ issues, prefs, memorySummary, memoryCount: counts[id] ?? 0 });
-    const pool = parseScouting(digest.markdown, id) && deps.pool ? await deps.pool(id).catch(() => null) : null;
+    const pool = parseWatching(digest.markdown, id) && deps.pool ? await deps.pool(id).catch(() => null) : null;
     return digestPage({ digest, issues, prefs, memorySummary, memoryCount: counts[id] ?? 0, pool });
   }
   return errorPage(404, "That page doesn't exist.");

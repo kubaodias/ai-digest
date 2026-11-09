@@ -13,7 +13,7 @@ Design specs and the decisions behind ai-digest, in the order they were made. Ea
 | 0007 | [Security: operator token, signed links, no actor front doors](0007-security.md) | accepted | 0.1.1, 0.1.2, 0.2.0, 0.3.0 |
 | 0008 | [Public URL, TLS and custom domains](0008-public-url-and-custom-domains.md) | accepted | 0.3.0, 0.4.2 |
 | 0009 | [One-off General digest and preferences shared between digests](0009-general-digest-and-shared-preferences.md) | accepted | 0.4.0 |
-| 0010 | [Continuous scouting](0010-continuous-scouting.md) | accepted (phase 1) | 0.5.0 |
+| 0010 | [Watching](0010-watching.md) | accepted (phase 1) | 0.5.0, 0.5.1 |
 
 ## Format
 

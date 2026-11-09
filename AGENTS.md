@@ -5,9 +5,10 @@ Context for a coding agent working in this repository: an AI agent on Telnyx Edg
 | file | what it is | who changes it |
 |---|---|---|
 | `src/index.ts`, `src/router.ts` | The function's entry point and the v1 API (the only HTTP surface) | you |
-| `src/agent.ts` | The agent class: post-run email delivery, the `feedback` and `digests` actors, the email template | you |
+| `src/agent.ts` | The agent class: post-run email delivery, the `feedback`, `digests` and pool actors, web tool budgets, the email template | you |
 | `src/profile.ts` | Digest definitions: parsing, validation, the run request | you |
 | `src/instructions.ts` | How the research model researches and writes any digest | you |
+| `src/pool.ts`, `src/watch-instructions.ts` | Watching digests (`watch:`): the candidate pool, scoring and send decisions; the check and issue-writing requests | you |
 | `src/general.ts` | The built-in General digest's template (one-off topics, `npm run digests -- ask`) | you |
 | `src/images.ts`, `src/feedback.ts`, `src/preferences.ts`, `src/digest.ts`, `src/config.ts`, `src/auth.ts` | Pictures, feedback, preference scoring, digest detection, settings from secrets, the operator token | you |
 | `test/*.test.ts` | Regression tests, `npm test` (node:test, no network) | you |

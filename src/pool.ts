@@ -1,8 +1,8 @@
-// Continuous scouting (docs/spec/0010-continuous-scouting.md): the candidate
-// pool a digest's scout passes fill, and the decision when to send an issue.
+// Watching (docs/spec/0010-watching.md): the candidate
+// pool a digest's checks fill, and the decision when to send an issue.
 // Pure functions, no I/O, covered by test/pool.test.ts. The pool actor
 // (agent.ts) holds the state and starts the runs; prompts are in
-// scout-instructions.ts.
+// watch-instructions.ts.
 
 import type { DigestProfile } from "./profile.ts";
 import type { Preferences, SharedPreferences } from "./preferences.ts";
@@ -24,9 +24,9 @@ export interface PoolEntry {
   published?: string;
   firstSeen: string;
   lastSeen: string;
-  /** How many passes found it. */
+  /** How many checks found it. */
   sightings: number;
-  /** The model's 1–10 estimate, latest pass wins. */
+  /** The model's 1–10 estimate, latest check wins. */
   importance: number;
   primary: boolean;
   tags: string[];
@@ -42,13 +42,13 @@ export interface PoolEntry {
   dropped?: string;
 }
 
-/** A known story a pass came across again, with any sources it hadn't been seen on. */
+/** A known story a check came across again, with any sources it hadn't been seen on. */
 export interface Sighting {
   id: string;
   sources: string[];
 }
 
-/** One candidate as a scout pass reports it, after validation and tagging. */
+/** One candidate as a check reports it, after validation and tagging. */
 export interface Candidate {
   headline: string;
   url: string;
@@ -64,9 +64,9 @@ export interface Candidate {
   entities: string[];
 }
 
-export interface ScoutSettings {
-  /** Hours between passes. */
-  scoutHours: number;
+export interface WatchSettings {
+  /** Hours between checks. */
+  watchHours: number;
   sendAt: number;
   strong: number;
   minGapDays: number;
@@ -79,15 +79,15 @@ export const KEEP_DAYS = 90;
 export const MAX_CANDIDATES = 200;
 /** A reservation for an issue being written returns to the pool after this long. */
 export const RESERVATION_MS = 60 * 60 * 1000;
-/** Candidates a single pass may report. */
-export const MAX_PER_PASS = 15;
-/** Candidates a single pass may add about the same product or company (variety). */
+/** Candidates a single check may report. */
+export const MAX_PER_CHECK = 15;
+/** Candidates a single check may add about the same product or company (variety). */
 export const MAX_PER_ENTITY = 2;
 /** Forced and max_gap issues leave out stories below this score, unless none reach it. */
 export const FLOOR = 5;
 /** A story counts as trending (widely covered) from this many independent sources. */
 export const TRENDING = 4;
-/** Pool headlines listed in a scout request as "known". */
+/** Pool headlines listed in a check request as "known". */
 export const KNOWN_IN_REQUEST = 60;
 const DAY = 24 * 3600 * 1000;
 
@@ -131,15 +131,15 @@ export function entryId(canonical: string): string {
   return (h >>> 0).toString(36);
 }
 
-// ── the scout reply ──────────────────────────────────────────────────────────
+// ── the check reply ──────────────────────────────────────────────────────────
 
 /**
- * The candidates in a scout pass's reply (JSON, possibly fenced), validated:
+ * The candidates in a check's reply (JSON, possibly fenced), validated:
  * a parseable http(s) URL, a headline, importance 1–10 (clamped), a date in
- * the window when given (else dropped), at most MAX_PER_PASS. Untagged: tags
+ * the window when given (else dropped), at most MAX_PER_CHECK. Untagged: tags
  * and entities are added by the caller.
  */
-export function parseScoutReply(text: string, window: { since: string; until: string }): { candidates: Omit<Candidate, "tags" | "entities">[]; dropped: number; seen: Sighting[] } {
+export function parseCheckReply(text: string, window: { since: string; until: string }): { candidates: Omit<Candidate, "tags" | "entities">[]; dropped: number; seen: Sighting[] } {
   let raw: unknown[] = [];
   let seenRaw: unknown[] = [];
   try {
@@ -180,7 +180,7 @@ export function parseScoutReply(text: string, window: { since: string; until: st
       ...(typeof c.sameAs === "string" && c.sameAs ? { sameAs: c.sameAs } : {}),
       primary: c.primary === true,
     });
-    if (out.length >= MAX_PER_PASS) break;
+    if (out.length >= MAX_PER_CHECK) break;
   }
   return { candidates: out, dropped: raw.length - out.length, seen };
 }
@@ -229,7 +229,7 @@ export function sameStory(entry: Pick<PoolEntry, "headline" | "entities">, c: Pi
 }
 
 /**
- * Add one pass's candidates to the pool (a new array; entries are copied when
+ * Add one check's candidates to the pool (a new array; entries are copied when
  * changed). A candidate joins an entry with the same canonical URL, or the
  * entry it names in `sameAs` when they share an entity or most title words;
  * otherwise it's new. Joining adds a sighting and its domains to `sources`,
@@ -242,14 +242,14 @@ export function mergeCandidates(pool: PoolEntry[], candidates: Candidate[], now:
   let added = 0;
   let merged = 0;
   let resighted = 0;
-  const seenThisPass = new Set<string>();
+  const seenThisCheck = new Set<string>();
   // Known stories reported as seen again: a sighting, and any new sources (unknown ids are ignored).
   for (const x of seen) {
     const e = byId.get(x.id);
-    if (!e || seenThisPass.has(e.id)) continue;
+    if (!e || seenThisCheck.has(e.id)) continue;
     e.sightings++;
     e.lastSeen = now;
-    seenThisPass.add(e.id);
+    seenThisCheck.add(e.id);
     for (const u of x.sources) {
       const domain = domainOf(u);
       if (domain && !e.sources.some((s) => s.domain === domain)) e.sources.push({ domain, url: u });
@@ -266,9 +266,9 @@ export function mergeCandidates(pool: PoolEntry[], candidates: Candidate[], now:
     }
     const domains = [{ domain: domainOf(c.url) || c.source, url: c.url }, ...c.otherSources.map((u) => ({ domain: domainOf(u), url: u }))];
     if (target) {
-      if (!seenThisPass.has(target.id)) {
+      if (!seenThisCheck.has(target.id)) {
         target.sightings++;
-        seenThisPass.add(target.id);
+        seenThisCheck.add(target.id);
       }
       target.lastSeen = now;
       for (const d of domains) if (d.domain && !target.sources.some((s) => s.domain === d.domain)) target.sources.push(d);
@@ -303,7 +303,7 @@ export function mergeCandidates(pool: PoolEntry[], candidates: Candidate[], now:
     };
     next.push(entry);
     byId.set(id, entry);
-    seenThisPass.add(id);
+    seenThisCheck.add(id);
     added++;
   }
   return { pool: next, added, merged, resighted };
@@ -385,7 +385,7 @@ export type Decision =
  * `ids` are the candidates to include, strongest first, at most `maxItems` and at most
  * MAX_PER_ENTITY about the same product or company (the rest stay for a later issue).
  */
-export function decide(pool: PoolEntry[], s: ScoutSettings, lastIssueAt: string, now: string, maxItems: number, force = false): Decision {
+export function decide(pool: PoolEntry[], s: WatchSettings, lastIssueAt: string, now: string, maxItems: number, force = false): Decision {
   const live = pool.filter((e) => e.state === "candidate").sort((a, b) => b.score - a.score || b.sources.length - a.sources.length);
   const strong = live.filter((e) => e.score >= s.strong);
   const since = Date.parse(now) - Date.parse(lastIssueAt);
@@ -413,7 +413,7 @@ export function slotOf(iso: string): string {
   return iso.slice(0, 16).replace(/[:]/g, "").toLowerCase();
 }
 
-/** Scout settings from a definition, or undefined when the digest doesn't scout. */
-export function scoutSettings(p: DigestProfile | undefined): ScoutSettings | undefined {
-  return p?.scout ? { ...p.scout } : undefined;
+/** Watch settings from a definition, or undefined when the digest doesn't watch. */
+export function watchSettings(p: DigestProfile | undefined): WatchSettings | undefined {
+  return p?.watch ? { ...p.watch } : undefined;
 }

@@ -24,4 +24,4 @@ The first versions were one digest (AI and software engineering news) with its t
 
 - New topics are a file and a `push`. The built-in General digest (0009) reuses the same format as a template.
 - Ids are file names (lowercase letters, digits, single dashes; `--` separates the run name), which later made a collision-free namespace for built-ins possible (0009).
-- `schedule:` was accepted from the start but unused, waiting for a scheduler; continuous scouting (0010) proposes replacing it.
+- `schedule:` was accepted from the start but unused, waiting for a scheduler; watching (0010) replaced it with `watch:`.

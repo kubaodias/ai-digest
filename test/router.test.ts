@@ -26,9 +26,9 @@ function fakeEnv(key: string | undefined = KEY) {
           deleteDigest: async (id: string) => (rec("deleteDigest", [id]), { id, deleted: store.delete(id) }),
           receive: async (text: string) => (rec("receive", [text]), { runId: "run-1" }),
           prepareGeneralRun: async (run: unknown) => (rec("prepareGeneralRun", [run]), { ok: true }),
-          poolConfigure: async () => (rec("poolConfigure", []), { scouting: true }),
-          poolDelete: async () => (rec("poolDelete", []), { scouting: false, cleared: 0 }),
-          startPass: async (o: unknown) => (rec("startPass", [o]), { ok: true, conversation: `${name.replace(/--pool$/, "")}--scout-x` }),
+          poolConfigure: async () => (rec("poolConfigure", []), { watching: true }),
+          poolDelete: async () => (rec("poolDelete", []), { watching: false, cleared: 0 }),
+          startCheck: async (o: unknown) => (rec("startCheck", [o]), { ok: true, conversation: `${name.replace(/--pool$/, "")}--check-x` }),
           writeNow: async (o: unknown) => (rec("writeNow", [o]), { ok: true, conversation: `${name.replace(/--pool$/, "")}--issue-x` }),
           poolView: async () => (rec("poolView", []), { digest: name, counts: { candidates: 2 } }),
           traces: async (n: number) => (rec("traces", [n]), { runs: [{ runId: "run-1", status: "completed", durationMs: 260233, toolCalls: 26 }] }),
@@ -102,7 +102,7 @@ test("runs: start one for a stored digest in its own conversation, with the defi
   assert.match(String(receive.args[0]), /For this issue in particular: focus on MCP/);
   const status = await route(req("/v1/runs/agent-memory--w45", { headers: h }), env);
   assert.deepEqual((await status.json()).runs, [{ runId: "run-1", status: "completed", durationMs: 260233, toolCalls: 26 }], "runs as a list (the actor returns { runs })");
-  const bad = await route(req("/v1/runs/" + encodeURIComponent("Scout pass started in x"), { headers: h }), env);
+  const bad = await route(req("/v1/runs/" + encodeURIComponent("Check started in x"), { headers: h }), env);
   assert.equal(bad.status, 400, "a name that isn't a conversation never reaches an actor");
 });
 
@@ -110,6 +110,8 @@ test("run names: the caller's if safe, else the current time", () => {
   assert.equal(runName("w45"), "w45");
   assert.equal(runName("a--b", new Date("2026-11-07T21:55:00Z")), "2026-11-07t2155");
   assert.equal(runName(undefined, new Date("2026-11-07T21:55:00Z")), "2026-11-07t2155");
+  for (const reserved of ["pool", "check-1", "issue-x"]) assert.equal(runName(reserved, new Date("2026-11-07T21:55:00Z")), "2026-11-07t2155", `"${reserved}" is a watching digest's own conversation`);
+  assert.equal(runName("pools"), "pools");
 });
 
 test("unknown paths are 404 with a hint", async () => {
@@ -256,46 +258,47 @@ test("topicSlug: a short run-name prefix", () => {
   assert.equal(topicSlug("!!!"), "");
 });
 
-const scouting = `---\ntitle: "Harness Watch — {range}"\nitems: 3-6\nscout: 6h\n---\nAgent harnesses, for engineers building agents.\n`;
+const watching = `---\ntitle: "Harness Watch — {range}"\nitems: 3-6\nwatch: 6h\n---\nAgent harnesses, for engineers building agents.\n`;
 
-test("storing a definition arms its scout timer; deleting it stops the timer and empties the pool", async () => {
+test("storing a definition arms its watch timer; deleting it stops the timer and empties the pool", async () => {
   const { env, calls } = fakeEnv();
   const h = await auth();
-  const r = await route(req("/v1/digests/harness-watch", { method: "PUT", headers: h, body: scouting }), env);
+  const r = await route(req("/v1/digests/harness-watch", { method: "PUT", headers: h, body: watching }), env);
   assert.equal(r.status, 200);
-  assert.deepEqual((await r.json()).scouting, { scouting: true });
+  const put = await r.json();
+  assert.deepEqual(put.watching, { watching: true });
   await route(req("/v1/digests/harness-watch", { method: "DELETE", headers: h }), env);
   assert.deepEqual(calls.filter((c) => c.method === "poolConfigure").map((c) => c.actor), ["harness-watch--pool"]);
   assert.deepEqual(calls.filter((c) => c.method === "poolDelete").map((c) => c.actor), ["harness-watch--pool"]);
 });
 
-test("scout and pool routes: a pass now (with a replay window), the pool, only for scouting digests", async () => {
+test("check and pool routes: a check now (with a replay window), the pool, only for watching digests", async () => {
   const { env, calls, store } = fakeEnv();
   const h = { ...(await auth()), "content-type": "application/json" };
-  store.set("harness-watch", scouting);
+  store.set("harness-watch", watching);
   store.set("agent-memory", example);
-  const r = await route(req("/v1/digests/harness-watch/scout", { method: "POST", headers: h, body: JSON.stringify({ since: "2026-11-02", until: "2026-11-04T00:00:00Z", decide: false }) }), env);
+  const r = await route(req("/v1/digests/harness-watch/check", { method: "POST", headers: h, body: JSON.stringify({ since: "2026-11-02", until: "2026-11-04T00:00:00Z", decide: false }) }), env);
   assert.equal(r.status, 202);
   assert.deepEqual(calls.at(-1)!.args[0], { since: "2026-11-02T00:00:00.000Z", until: "2026-11-04T00:00:00.000Z", decide: false });
   assert.equal(calls.at(-1)!.actor, "harness-watch--pool");
-  assert.equal((await route(req("/v1/digests/harness-watch/scout", { method: "POST", headers: h, body: JSON.stringify({ since: "soon" }) }), env)).status, 400);
-  assert.equal((await route(req("/v1/digests/harness-watch/scout", { method: "POST", headers: h, body: JSON.stringify({ since: "2026-11-04", until: "2026-11-02" }) }), env)).status, 400);
-  const not = await route(req("/v1/digests/agent-memory/scout", { method: "POST", headers: h, body: "{}" }), env);
+  assert.equal((await route(req("/v1/digests/harness-watch/check", { method: "POST", headers: h, body: JSON.stringify({ since: "soon" }) }), env)).status, 400);
+  assert.equal((await route(req("/v1/digests/harness-watch/check", { method: "POST", headers: h, body: JSON.stringify({ since: "2026-11-04", until: "2026-11-02" }) }), env)).status, 400);
+  const not = await route(req("/v1/digests/agent-memory/check", { method: "POST", headers: h, body: "{}" }), env);
   assert.equal(not.status, 400);
-  assert.equal((await not.json()).error, "not_scouting");
+  assert.equal((await not.json()).error, "not_watching");
   const pool = await route(req("/v1/digests/harness-watch/pool", { headers: h }), env);
   assert.deepEqual((await pool.json()).counts, { candidates: 2 });
   assert.equal((await route(req("/v1/digests/missing/pool", { headers: h }), env)).status, 404);
 });
 
-test("a run of a scouting digest writes from the pool: after a pass, or right away with scout: false", async () => {
+test("a run of a watching digest writes from the pool: after a check, or right away with check: false", async () => {
   const { env, calls, store } = fakeEnv();
   const h = { ...(await auth()), "content-type": "application/json" };
-  store.set("harness-watch", scouting);
+  store.set("harness-watch", watching);
   const a = await (await route(req("/v1/digests/harness-watch/runs", { method: "POST", headers: h, body: JSON.stringify({ message: "security angle" }) }), env)).json();
-  assert.equal(a.mode, "scout-then-write");
+  assert.equal(a.mode, "check-then-write");
   assert.deepEqual(calls.at(-1)!.args[0], { force: { focus: "security angle" } });
-  const b = await (await route(req("/v1/digests/harness-watch/runs", { method: "POST", headers: h, body: JSON.stringify({ scout: false }) }), env)).json();
+  const b = await (await route(req("/v1/digests/harness-watch/runs", { method: "POST", headers: h, body: JSON.stringify({ check: false }) }), env)).json();
   assert.equal(b.mode, "from-pool");
   assert.equal(calls.at(-1)!.method, "writeNow");
   assert.equal(calls.filter((c) => c.method === "receive").length, 0, "no direct research run");
