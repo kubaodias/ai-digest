@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-09
+
 ### Changed
 
 - **Renamed to watching**, with no old names kept: the setting is `watch: 6h`; one look for new stories is a **check**, run in `<digest>--check-<time>`; `POST /v1/digests/<id>/check` starts one (`npm run digests -- watch <id>`); `"check": false` on a run writes from the pool (`npm run digests -- run <id> --from-pool`); a run's `mode` is `check-then-write`, a digest that doesn't watch answers `not_watching`; responses have `watch`, `watching`, `checks`, `lastCheckAt`, `nextCheckAt`, `checkRunning`; the digests page shows a "Watching" card; the design is [spec 0010](docs/spec/0010-watching.md). A pool from 0.5.0 keeps its stories but not its timer or counters: put `watch:` in the definition and push it to arm the new timer. The 0.5.0 entry below uses the new names.
