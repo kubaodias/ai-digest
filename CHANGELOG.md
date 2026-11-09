@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- `npm run deploy` and the other scripts retry Telnyx API calls that are rate limited (429), which happened when a deploy stored its secrets.
 - `POST /v1/digests/<id>/runs` on a scouting digest runs a pass and then writes from its pool (`"scout": false` writes from the pool right away).
 - Storing a definition (`PUT`, so every `npm run digests -- push` and deploy) arms, re-arms or cancels its scout timer; the response includes `scouting`.
 - `GET /v1/digests` returns `scout` (the settings or null) instead of `schedule`.

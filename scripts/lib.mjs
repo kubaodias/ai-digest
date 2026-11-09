@@ -44,11 +44,19 @@ export function apiKey(env) {
 
 /** A Telnyx API call; throws with the API's message on failure. */
 export async function telnyx(env, method, path, body) {
-  const r = await fetch(API + path, {
-    method,
-    headers: { Authorization: `Bearer ${apiKey(env)}`, "Content-Type": "application/json" },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
+  // Rate limits (429) are retried with backoff: a deploy sets several secrets in a row.
+  let r;
+  for (let attempt = 0; ; attempt++) {
+    r = await fetch(API + path, {
+      method,
+      headers: { Authorization: `Bearer ${apiKey(env)}`, "Content-Type": "application/json" },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    if (r.status !== 429 || attempt >= 4) break;
+    const wait = Number(r.headers.get("retry-after")) * 1000 || 5000 * 2 ** attempt;
+    console.log(`  (rate limited; retrying in ${Math.round(wait / 1000)} s)`);
+    await new Promise((res) => setTimeout(res, wait));
+  }
   const text = await r.text();
   if (!r.ok) throw new Error(`${method} ${path}: ${r.status} ${text.slice(0, 300)}`);
   return text ? JSON.parse(text) : {};
