@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-09
+
 ### Fixed
 
 - The 0.4.0 memory summary instructions were over Agent Memory's 2000-character limit, so `npm run deploy` failed at its last step (`422 … at most 2000 characters`). Shortened, and a test now checks the limit.
