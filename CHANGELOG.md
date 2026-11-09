@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- On a custom domain, sign-in links (and the feedback page's links) pointed to the function's `*.telnyxcompute.com` address: requests reach the function with that host. With `PUBLIC_URL` set, links are now built from it.
+- "Email me a sign-in link" waited for the email API before answering. The `digests` actor now sends the email right after the request returns (an immediate scheduled call), with a direct send as the fallback.
+
+### Changed
+
+- The masked address on "Check your inbox" shows the first and last character with a fixed number of stars (`k*****t@example.com`), so the length stays hidden.
+
 ## [0.4.1] - 2026-11-09
 
 ### Fixed

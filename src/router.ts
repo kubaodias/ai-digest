@@ -64,7 +64,12 @@ async function appRoute(req: Request, env: RouterEnv): Promise<Response> {
     },
     async sendEmail(to, subject, text, html) {
       if (!t || !from) throw new Error("email isn't configured (DIGEST_EMAIL_FROM)");
-      await t.post("/emails", { body: { from, to: [to], subject, text_body: text, html_body: html } });
+      // The digests actor sends it right after this request returns (an immediate scheduled call),
+      // so the page answers at once; sending directly is the fallback.
+      const queued = await Promise.resolve()
+        .then(() => env.AI_DIGEST.idFromName(DIGESTS_ACTOR).queueEmail({ to, subject, text, html }))
+        .catch(() => false);
+      if (!queued) await t.post("/emails", { body: { from, to: [to], subject, text_body: text, html_body: html } });
     },
   });
 }
@@ -93,23 +98,29 @@ function generalSummary() {
 }
 
 /**
- * The request as the client sent it. TLS ends before the function, so requests
- * arrive as http:// (and the platform's X-Forwarded-Proto says http too, for
- * that internal hop). Every link built from the request (sign-in links, view
- * links, feedback links) must say https://, and Secure cookies need it, so
- * anything but localhost (development) is treated as https://.
+ * The request as the reader sees it. Every link built from the request
+ * (sign-in links, view links, feedback links) must use the public address:
+ *   - TLS ends before the function, so requests arrive as http:// (and the
+ *     platform's X-Forwarded-Proto says http too, for that internal hop);
+ *     Secure cookies need https://, so anything but localhost is https://.
+ *   - On a custom domain the request still carries the function's own
+ *     *.telnyxcompute.com host, so with PUBLIC_URL set its origin is used.
+ * Localhost (development) is left as it is.
  */
-export function asPublic(req: Request): Request {
+export function asPublic(req: Request, publicUrl?: string): Request {
   const url = new URL(req.url);
-  const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
-  const want = local ? url.protocol.slice(0, -1) : "https";
-  if (url.protocol === `${want}:`) return req;
-  url.protocol = `${want}:`;
-  return new Request(url.toString(), req);
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname)) return req;
+  let origin: URL | undefined;
+  try {
+    origin = publicUrl ? new URL(publicUrl) : undefined;
+  } catch {}
+  const next = new URL(url.pathname + url.search, origin && /^https?:$/.test(origin.protocol) ? origin.origin : `https://${url.host}`);
+  if (next.protocol === "http:") next.protocol = "https:";
+  return next.toString() === url.toString() ? req : new Request(next.toString(), req);
 }
 
 export async function route(incoming: Request, env: RouterEnv): Promise<Response> {
-  const req = asPublic(incoming);
+  const req = asPublic(incoming, await secret(env as any, SECRET.publicUrl).catch(() => ""));
   const url = new URL(req.url);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method.toUpperCase();

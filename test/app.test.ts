@@ -61,7 +61,10 @@ test("tokens: signed per purpose, expire, reject tampering", async () => {
 test("cookies and masking", () => {
   assert.deepEqual(parseCookies("a=1; aid_session=x%2Ey; b=2"), { a: "1", aid_session: "x.y", b: "2" });
   assert.deepEqual(parseCookies(null), {});
-  assert.equal(maskEmail("kuba@example.com"), "k***@example.com");
+  assert.equal(maskEmail("kuba@example.com"), "k*****a@example.com");
+  assert.equal(maskEmail("kodeo.it.reader@example.com"), "k*****r@example.com", "the length stays hidden");
+  assert.equal(maskEmail("k@example.com"), "k*****@example.com");
+  assert.equal(maskEmail("no-at-sign"), "your address");
 });
 
 test("without a session every page redirects to sign-in", async () => {
@@ -80,7 +83,7 @@ test("without a session every page redirects to sign-in", async () => {
 test("sign-in: link emailed to the admin address, works once, sets a secure session cookie", async () => {
   const { d, sent } = deps();
   const r = await app(new Request(ORIGIN + "/v1/app/sign-in", { method: "POST" }), d);
-  assert.match(await r.text(), /a\*\*\*@example\.com/);
+  assert.match(await r.text(), /a\*\*\*\*\*n@example\.com/);
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.to, "admin@example.com");
   const link = sent[0]!.text.match(/https:\/\/\S+/)![0];

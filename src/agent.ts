@@ -479,6 +479,34 @@ export class AiDigest extends ManagedAgent {
     return { id, changed: true, versions: history.length + 1 };
   }
 
+  /**
+   * Send an email right after the caller's request returns (the page doesn't
+   * wait for the email API): stored with an immediate scheduled call. Returns
+   * false when it couldn't be scheduled, so the caller sends it itself.
+   * Called in-process by the router; not @rpc.
+   */
+  async queueEmail(mail: { to: string; subject: string; text: string; html: string }) {
+    try {
+      await (this as any).schedule(0, "sendQueuedEmail", mail);
+      return true;
+    } catch (err) {
+      console.log(JSON.stringify({ email: "schedule failed", error: err instanceof Error ? err.message : String(err) }));
+      return false;
+    }
+  }
+
+  /** Scheduled by queueEmail. */
+  async sendQueuedEmail(mail: { to: string; subject: string; text: string; html: string }) {
+    const started = Date.now();
+    const from = await secret(this.agentEnv, SECRET.emailFrom);
+    try {
+      await (this.agentEnv.TELNYX as any).post("/emails", { body: { from, to: [mail.to], subject: mail.subject, text_body: mail.text, html_body: mail.html } });
+      console.log(JSON.stringify({ email: "sent", subject: mail.subject, ms: Date.now() - started }));
+    } catch (err) {
+      console.log(JSON.stringify({ email: "failed", subject: mail.subject, error: err instanceof Error ? err.message : String(err) }));
+    }
+  }
+
   /** Sign-in links: at most one a minute. Called in-process by the page. */
   async magicRequested(now: number) {
     const state: any = await (this as any).getState();

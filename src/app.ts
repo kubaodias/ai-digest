@@ -64,10 +64,13 @@ export function sessionCookie(token: string): string {
 }
 export const clearCookie = `${SESSION_COOKIE}=; Path=${APP}; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 
-/** k***@example.com */
+/** k*****t@example.com: the first and last character, and a fixed number of stars (the length stays hidden). */
 export function maskEmail(a: string): string {
-  const [user, domain] = a.split("@");
-  return user && domain ? `${user[0]}***@${domain}` : "your address";
+  const at = a.lastIndexOf("@");
+  const user = a.slice(0, at);
+  const domain = a.slice(at + 1);
+  if (at < 1 || !domain) return "your address";
+  return `${user[0]}*****${user.length > 1 ? user[user.length - 1] : ""}@${domain}`;
 }
 
 // ── what the pages show ─────────────────────────────────────────────────────

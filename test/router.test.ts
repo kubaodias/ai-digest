@@ -124,6 +124,27 @@ test("requests arrive as http:// behind TLS: links are built from https://", asy
   assert.equal(new URL(asPublic(new Request("http://digest.example.com/v1/app")).url).protocol, "https:");
   assert.equal(new URL(asPublic(new Request("http://digest.example.com/v1/app", { headers: { "x-forwarded-proto": "http" } })).url).protocol, "https:", "the platform's X-Forwarded-Proto: http describes its internal hop, not the client");
   assert.equal(new URL(asPublic(new Request("http://localhost:8787/v1/app")).url).protocol, "http:", "local development unchanged");
+});
+
+test("with PUBLIC_URL set (e.g. a custom domain), links are built from it, not from the function's own host", async () => {
+  const inner = new Request("http://ai-digest-0000.telnyxcompute.com/v1/app/sign-in?x=1", { method: "POST", headers: { cookie: "a=b" } });
+  const pub = asPublic(inner, "https://digest.example.com");
+  assert.equal(pub.url, "https://digest.example.com/v1/app/sign-in?x=1");
+  assert.equal(pub.method, "POST");
+  assert.equal(pub.headers.get("cookie"), "a=b");
+  assert.equal(asPublic(inner, "").url, "https://ai-digest-0000.telnyxcompute.com/v1/app/sign-in?x=1", "no PUBLIC_URL: the request's host, as https");
+  assert.equal(asPublic(inner, "not a url").url, "https://ai-digest-0000.telnyxcompute.com/v1/app/sign-in?x=1");
+  assert.equal(asPublic(new Request("http://localhost:8787/v1/app"), "https://digest.example.com").url, "http://localhost:8787/v1/app", "local development unchanged");
+  const forwarded: string[] = [];
+  const custom: RouterEnv = {
+    SECRETS: { get: async (n: string) => (n === "PUBLIC_URL" ? "https://digest.example.com" : "") },
+    AI_DIGEST: { idFromName: () => ({ fetch: async (r: Request) => (forwarded.push(r.url), new Response("ok")) }) },
+  };
+  await route(new Request("http://ai-digest-0000.telnyxcompute.com/v1/feedback?p=x&s=y"), custom);
+  assert.equal(forwarded[0], "https://digest.example.com/v1/feedback?p=x&s=y", "the feedback actor builds its links from the public URL");
+});
+
+test("the feedback actor gets the request as https://", async () => {
   const { env, calls } = fakeEnv();
   await route(new Request("http://digest.example.com/v1/feedback?p=x&s=y"), env);
   assert.equal(calls[0]!.actor, "feedback");
@@ -143,7 +164,22 @@ test("sign-in links in the email are https:// even though the request arrived as
     AI_DIGEST: { idFromName: () => ({ magicRequested: async () => ({ ok: true }) }) },
   };
   await route(new Request("http://digest.example.com/v1/app/sign-in", { method: "POST" }), env3 as any);
-  assert.match(sent[0]!, /https:\/\/digest\.example\.com\/v1\/app\/auth\?t=/);
+  assert.match(sent[0]!, /https:\/\/digest\.example\.com\/v1\/app\/auth\?t=/, "no queue: sent directly");
+});
+
+test("sign-in: the email is queued with the digests actor (the page doesn't wait for it), links on PUBLIC_URL", async () => {
+  const queued: { to: string; text: string }[] = [];
+  const posted: unknown[] = [];
+  const env4 = {
+    SECRETS: { get: async (n: string) => ({ AGENT_AUTH_KEY: KEY, DIGEST_EMAIL_TO: "kodeo.reader@example.com", DIGEST_EMAIL_FROM: "digest@example.com", PUBLIC_URL: "https://digest.example.com" })[n] ?? "" },
+    TELNYX: { get: async () => ({}), post: async (_p: string, o: unknown) => void posted.push(o) },
+    AI_DIGEST: { idFromName: () => ({ magicRequested: async () => ({ ok: true }), queueEmail: async (m: { to: string; text: string }) => (queued.push(m), true) }) },
+  };
+  const r = await route(new Request("http://ai-digest-0000.telnyxcompute.com/v1/app/sign-in", { method: "POST" }), env4 as any);
+  assert.match(await r.text(), /k\*\*\*\*\*r@example\.com/);
+  assert.equal(posted.length, 0, "not sent inline");
+  assert.equal(queued[0]!.to, "kodeo.reader@example.com");
+  assert.match(queued[0]!.text, /https:\/\/digest\.example\.com\/v1\/app\/auth\?t=/, "the public URL, not the function's own host");
 });
 
 
