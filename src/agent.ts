@@ -28,7 +28,7 @@ import {
 // service actors, "feedback" (votes, sent issues) and "digests" (the definitions).
 // A digest with `watch:` also has a pool actor, "<digest>--pool", which runs
 // checks ("<digest>--check-<slot>") and writes issues from its pool
-// ("<digest>--issue-<slot>"); see pool.ts and docs/spec/0010-continuous-scouting.md.
+// ("<digest>--issue-<slot>"); see pool.ts and docs/spec/0010-watching.md.
 // Account-specific settings are Telnyx secrets: see config.ts.
 
 /** The service actor that stores the digest definitions. */

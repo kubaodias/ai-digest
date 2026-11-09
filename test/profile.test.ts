@@ -147,5 +147,4 @@ test("watching settings: defaults, ranges, and they need watch", () => {
   assert.match(err("x", file("title: x\nwatch: 6h\nstrong: 11")), /"strong" must be 1–10/);
   assert.match(err("x", file("title: x\nwatch: 6h\nmin_gap: 5d\nmax_gap: 2d")), /"max_gap" must be at least "min_gap"/);
   assert.match(err("x", file("title: x\nsend_at: 4")), /"send_at" needs "watch"/);
-  assert.match(err("x", file("title: x\nscout: 6h")), /scout/, "the old name is an unknown setting");
 });

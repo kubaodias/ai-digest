@@ -1,4 +1,4 @@
-// Watching (docs/spec/0010-continuous-scouting.md): the candidate
+// Watching (docs/spec/0010-watching.md): the candidate
 // pool a digest's checks fill, and the decision when to send an issue.
 // Pure functions, no I/O, covered by test/pool.test.ts. The pool actor
 // (agent.ts) holds the state and starts the runs; prompts are in

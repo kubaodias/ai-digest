@@ -27,7 +27,7 @@ export interface DigestProfile {
   images: boolean;
   /** Recipients overriding DIGEST_EMAIL_TO. */
   to: string[];
-  /** Watching (docs/spec/0010-continuous-scouting.md): set when the file has `watch:`. */
+  /** Watching (docs/spec/0010-watching.md): set when the file has `watch:`. */
   watch?: { watchHours: number; sendAt: number; strong: number; minGapDays: number; maxGapDays: number };
   /** What to cover, for whom, sources, what to leave out: given to the research model as written. */
   description: string;

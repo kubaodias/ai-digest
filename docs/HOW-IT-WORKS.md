@@ -56,7 +56,7 @@ The operator token is `Authorization: Bearer <hex HMAC-SHA256 of "telnyx-acp ope
 
 ## Watching digests
 
-A digest with `watch:` ([spec 0010](spec/0010-continuous-scouting.md), where it's called scouting) has a **pool actor**, `<digest>--pool`, that holds its candidate pool, owns its timer (a durable one-off task that schedules the next one, re-armed when the definition is stored if it was lost) and decides when to send. It never calls the model itself:
+A digest with `watch:` ([spec 0010](spec/0010-watching.md)) has a **pool actor**, `<digest>--pool`, that holds its candidate pool, owns its timer (a durable one-off task that schedules the next one, re-armed when the definition is stored if it was lost) and decides when to send. It never calls the model itself:
 
 1. **A check** runs in its own conversation, `<digest>--check-<time>`: a short research run (`checkMessage` in `src/watch-instructions.ts`) that gets the window to look in (since the last check, minus an hour) and the stories already known, and answers with JSON: new candidates, and the ids of known stories it saw again (`seen`).
 2. **Delivery:** the check's post-run hook validates and tags the candidates and hands them to the pool through a durable task, retried until it lands. If the runtime restarts before the hook runs, the pool re-delivers the check's reply the next time a check is due (or gives it up when there's none).

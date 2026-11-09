@@ -1,4 +1,4 @@
-// The requests for watching (docs/spec/0010-continuous-scouting.md):
+// The requests for watching (docs/spec/0010-watching.md):
 // a check (find new candidates, answer JSON) and an issue written from
 // the pool (no new search). Kept apart from agent.ts so the class file has no
 // long template strings. Pure; covered by test/pool.test.ts.

@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- **Scouting is now called watching**, everywhere and without the old names: the setting is `watch: 6h` (a file with `scout:` gets an unknown-setting error); a pass is a **check**, run in `<digest>--check-<time>`; `POST /v1/digests/<id>/check` starts one (`npm run digests -- watch <id>`); `"check": false` on a run writes from the pool (`npm run digests -- run <id> --from-pool`); a run's `mode` is `check-then-write`, a digest that doesn't watch answers `not_watching`; responses have `watch`, `watching`, `checks`, `lastCheckAt`, `nextCheckAt`, `checkRunning`; the digests page shows a "Watching" card. A pool from 0.5.0 keeps its stories but not its timer or counters: replace `scout:` with `watch:` and push the definition to arm the new timer.
+- **Renamed to watching**, with no old names kept: the setting is `watch: 6h`; one look for new stories is a **check**, run in `<digest>--check-<time>`; `POST /v1/digests/<id>/check` starts one (`npm run digests -- watch <id>`); `"check": false` on a run writes from the pool (`npm run digests -- run <id> --from-pool`); a run's `mode` is `check-then-write`, a digest that doesn't watch answers `not_watching`; responses have `watch`, `watching`, `checks`, `lastCheckAt`, `nextCheckAt`, `checkRunning`; the digests page shows a "Watching" card; the design is [spec 0010](docs/spec/0010-watching.md). A pool from 0.5.0 keeps its stories but not its timer or counters: put `watch:` in the definition and push it to arm the new timer. The 0.5.0 entry below uses the new names.
 - README: watching in the definition example, the commands, the diagram and the project layout.
 
 ### Fixed
@@ -18,22 +18,22 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- **Continuous scouting** ([spec 0010](docs/spec/0010-continuous-scouting.md), phase 1). A digest with `scout: 6h` (1h–24h) runs a short research pass at that interval and keeps what it finds in a candidate pool; an issue goes out when `send_at` stories score at least `strong` (and `min_gap` has passed), or at `max_gap` at the latest with whatever the pool holds (an empty pool sends a short "nothing new" note). Defaults: `send_at` = the lower bound of `items`, `strong: 7`, `min_gap: 2d`, `max_gap: 7d`.
-- **The pool** merges stories by canonical URL (or a model-suggested match that shares an entity or most title words), counts independent sources and repeat sightings (passes report known stories they see again), and scores them by importance, corroboration, sightings, primary source, your feedback (a product you don't use drops a story) and age. Stories older than the digest's `window` expire.
-- **Issues** are written from the chosen stories only, without new searching; pictures are picked at that point, never during passes. Stories the writer drops return to the pool. The title's date range comes from the stories' publication dates ("November 4–7, 2026").
-- **Quality and variety:** forced and `max_gap` issues leave out stories scoring below 5 unless none reach it; a pass adds at most 2 candidates about the same product and searches news and communities, not only release notes; an issue takes at most 2 stories about the same product (the rest wait for the next one) and merges consecutive releases into one item.
-- **Several sources per story:** passes report the other outlets covering a story; issues list up to 3 sources per item (the maker's page first, then reporting, then discussion; no link roundups; the writer looks for the maker's page when a story only has write-ups) and call a story widely covered only from 4 independent sources; the writer never mentions stories it dropped.
-- **Hard budgets:** a scout pass may make 8 web tool calls and an issue's writer 3 link checks and no searches, enforced in code (calls over budget are refused and the model answers with what it has).
-- **Timers** are spread out (the first pass 1–16 minutes after scouting is turned on, then every interval ± 10 minutes) and kept across deploys, so passes of different digests rarely run at the same time.
-- **Robustness:** a pass's candidates reach the pool through a durable, retried task; a pass whose reply never arrived (e.g. after a runtime restart) is re-delivered or given up the next time a pass is due; requests that start passes or issues return at once. Deleting a digest stops its timer and empties its pool.
-- `GET /v1/digests/<id>/pool`, `POST /v1/digests/<id>/scout` (`since`/`until` replay a past window, `decide: false` only fills the pool); `npm run digests -- pool <id>`, `scout <id> [--since] [--until] [--no-send]`, `run <id> [--no-scout]`; a scouting card on the digests page.
-- `docs/spec/`: decision records for the choices made so far (own entry point and v1 API, deterministic email, digest files, feedback and preferences, Agent Memory, pictures, security, public URL and custom domains, the General digest and shared preferences) and the continuous scouting design.
+- **Watching digests** ([spec 0010](docs/spec/0010-watching.md), phase 1). A digest with `watch: 6h` (1h–24h) runs a short research check at that interval and keeps what it finds in a candidate pool; an issue goes out when `send_at` stories score at least `strong` (and `min_gap` has passed), or at `max_gap` at the latest with whatever the pool holds (an empty pool sends a short "nothing new" note). Defaults: `send_at` = the lower bound of `items`, `strong: 7`, `min_gap: 2d`, `max_gap: 7d`.
+- **The pool** merges stories by canonical URL (or a model-suggested match that shares an entity or most title words), counts independent sources and repeat sightings (checks report known stories they see again), and scores them by importance, corroboration, sightings, primary source, your feedback (a product you don't use drops a story) and age. Stories older than the digest's `window` expire.
+- **Issues** are written from the chosen stories only, without new searching; pictures are picked at that point, never during checks. Stories the writer drops return to the pool. The title's date range comes from the stories' publication dates ("November 4–7, 2026").
+- **Quality and variety:** forced and `max_gap` issues leave out stories scoring below 5 unless none reach it; a check adds at most 2 candidates about the same product and searches news and communities, not only release notes; an issue takes at most 2 stories about the same product (the rest wait for the next one) and merges consecutive releases into one item.
+- **Several sources per story:** checks report the other outlets covering a story; issues list up to 3 sources per item (the maker's page first, then reporting, then discussion; no link roundups; the writer looks for the maker's page when a story only has write-ups) and call a story widely covered only from 4 independent sources; the writer never mentions stories it dropped.
+- **Hard budgets:** a check may make 8 web tool calls and an issue's writer 3 link checks and no searches, enforced in code (calls over budget are refused and the model answers with what it has).
+- **Timers** are spread out (the first check 1–16 minutes after watching is turned on, then every interval ± 10 minutes) and kept across deploys, so checks of different digests rarely run at the same time.
+- **Robustness:** a check's candidates reach the pool through a durable, retried task; a check whose reply never arrived (e.g. after a runtime restart) is re-delivered or given up the next time a check is due; requests that start checks or issues return at once. Deleting a digest stops its timer and empties its pool.
+- `GET /v1/digests/<id>/pool`, `POST /v1/digests/<id>/check` (`since`/`until` replay a past window, `decide: false` only fills the pool); `npm run digests -- pool <id>`, `watch <id> [--since] [--until] [--no-send]`, `run <id> [--from-pool]`; a watching card on the digests page.
+- `docs/spec/`: decision records for the choices made so far (own entry point and v1 API, deterministic email, digest files, feedback and preferences, Agent Memory, pictures, security, public URL and custom domains, the General digest and shared preferences) and the watching design.
 
 ### Changed
 
-- `POST /v1/digests/<id>/runs` on a scouting digest runs a pass and then writes from its pool (`"scout": false` writes from the pool right away).
-- Storing a definition (`PUT`, so every `npm run digests -- push` and deploy) arms, re-arms or cancels its scout timer; the response includes `scouting`.
-- `GET /v1/digests` returns `scout` (the settings or null) instead of `schedule`.
+- `POST /v1/digests/<id>/runs` on a watching digest runs a check and then writes from its pool (`"check": false` writes from the pool right away).
+- Storing a definition (`PUT`, so every `npm run digests -- push` and deploy) arms, re-arms or cancels its watch timer; the response includes `watching`.
+- `GET /v1/digests` returns `watch` (the settings or null) instead of `schedule`.
 - Source lines say "Sources:" before several links and "Source:" before one, in every digest.
 - `npm run deploy` and the other scripts retry Telnyx API calls that are rate limited (429), which happened when a deploy stored its secrets.
 - The screenshot fixture moved from `docs/fixtures/` to `scripts/fixtures/`, next to `npm run screenshots`, its only user.
@@ -45,7 +45,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Removed
 
-- The `schedule:` setting (never active). A file that still has it gets an error pointing to `scout:`.
+- The `schedule:` setting (never active). A file that still has it gets an error pointing to `watch:`.
 
 ## [0.4.2] - 2026-11-09
 
