@@ -35,7 +35,7 @@ ${"```"}
 
 ## 1. <Headline>
 **Why it matters:** <one or two concrete sentences, for this digest's reader>
-**Source:** [<site>](<url>) · <date>  (add a second source if useful)
+**Source:** [<site>](<url>) · <date>  (several: **Sources:** [<site>](<url>) · [<site>](<url>) · <date>)
 
 ...
 

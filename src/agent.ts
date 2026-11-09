@@ -14,7 +14,7 @@ import {
   canonicalUrl, capPerEntity, decide, housekeep, mergeCandidates, parseScoutReply, rescore, scoutSettings, slotOf,
   type Candidate, type Decision, type PoolEntry, type Sighting,
 } from "./pool.ts";
-import { quietNote, scoutMessage, writerMessage } from "./scout-instructions.ts";
+import { quietNote, scoutMessage, spendTool, toolBudget, writerMessage } from "./scout-instructions.ts";
 import {
   FEEDBACK_CONVERSATION, KEEP_DIGESTS, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
@@ -243,6 +243,39 @@ export class AiDigest extends ManagedAgent {
     super(ctx, env, spec, { tools: emailTools(env, holder) });
     holder.actor = this;
     this.agentEnv = env;
+  }
+
+  /** Web tool calls per run, counted for budgeted runs (scout passes, issues). */
+  private toolUse = { run: "", search: 0, fetch: 0 };
+
+  /**
+   * Scout passes and issues get a hard web tool budget (the prompt alone was
+   * overrun): the built-in web_search/fetch_page reach the platform through
+   * this env's TELNYX client, so a call over budget throws here and the tool
+   * returns the reason to the model as its error.
+   */
+  protected override toolEnv(): ReturnType<ManagedAgent["toolEnv"]> {
+    const base = super.toolEnv();
+    const budget = toolBudget(this.conversationName());
+    const telnyx = base.TELNYX;
+    if (!budget || !telnyx) return base;
+    return {
+      ...base,
+      TELNYX: {
+        post: <T>(path: string, opts?: { body?: unknown; query?: Record<string, unknown> }) => {
+          const run = String((this as any).activeRunId ?? "");
+          if (this.toolUse.run !== run) this.toolUse = { run, search: 0, fetch: 0 };
+          const refused = spendTool(budget, this.toolUse, path);
+          if (refused) {
+            console.log(JSON.stringify({ toolBudget: "refused", conversation: this.conversationName(), path, used: this.toolUse }));
+            return Promise.reject(new Error(refused)) as PromiseLike<T>;
+          }
+          return telnyx.post<T>(path, opts);
+        },
+        ...(telnyx.get ? { get: telnyx.get.bind(telnyx) } : {}),
+        ...(telnyx.delete ? { delete: telnyx.delete.bind(telnyx) } : {}),
+      },
+    };
   }
 
   /**

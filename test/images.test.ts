@@ -1,6 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { digestSections, dimensions, extractCandidates, rasterUrl, stableUrl } from "../src/images.ts";
+import { digestSections, dimensions, distinctImages, extractCandidates, imageKey, rasterUrl, stableUrl } from "../src/images.ts";
+
+test("imageKey: one picture at any size is one key; different pictures stay apart", () => {
+  const base = "https://static.example.com/story-media/123/HWbLl";
+  assert.equal(imageKey(`${base}-medium.jpg`), imageKey(`${base}-small.jpg`));
+  assert.equal(imageKey("https://example.com/a/chart-1024x576.png"), imageKey("https://example.com/a/chart.png?w=600"));
+  assert.equal(imageKey("https://example.com/a/chart@2x.png"), imageKey("https://example.com/a/chart.png"));
+  assert.notEqual(imageKey("https://example.com/a/diagram1.png"), imageKey("https://example.com/a/diagram2.png"));
+  assert.notEqual(imageKey("https://example.com/a/chart.png"), imageKey("https://example.com/b/chart.png"));
+  const picked = distinctImages([{ url: `${base}-medium.jpg` }, { url: `${base}-small.jpg` }, { url: "https://example.com/a/other.png" }]);
+  assert.deepEqual(picked.map((p) => p.url), [`${base}-medium.jpg`, "https://example.com/a/other.png"]);
+});
 
 test("an OpenAI-style page: described figures first (SVGs rasterized), teaser cards later, og image last", () => {
   const html = `<html><head><meta property="og:image" content="https://images.ctfassets.net/k/og/banner.png"></head><body>

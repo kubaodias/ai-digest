@@ -4,7 +4,7 @@ import {
   canonicalUrl, capPerEntity, trending, FLOOR, decide, entryId, housekeep, mergeCandidates, parseScoutReply, rescore, sameStory, scoreEntry, slotOf, titleOverlap,
   MAX_PER_PASS, RESERVATION_MS, type Candidate, type PoolEntry, type ScoutSettings,
 } from "../src/pool.ts";
-import { quietNote, scoutMessage, writerMessage, SCOUT_BUDGET, WRITER_CHECKS } from "../src/scout-instructions.ts";
+import { formatRange, quietNote, scoutMessage, spendTool, storiesRange, toolBudget, writerMessage, SCOUT_BUDGET, WRITER_CHECKS } from "../src/scout-instructions.ts";
 import { parseProfile } from "../src/profile.ts";
 
 const NOW = "2026-11-09T12:00:00.000Z";
@@ -221,7 +221,7 @@ test("the writer request: the stories, no search, title and items", () => {
   const e = entry({ sources: [{ domain: "acme.example.com", url: "https://acme.example.com/blog/harness-2" }, { domain: "news.example.org", url: "https://news.example.org/acme" }] });
   const m = writerMessage(profile, [e], { quiet: true, focus: "security angle" });
   assert.match(m, /^WRITE AN ISSUE FROM THESE STORIES\. Don't search the web/);
-  assert.match(m, /Title: Harness Watch — <the date range the stories cover>/);
+  assert.match(m, /Title: Harness Watch — November 8, 2026 \(use it as given\)/, "the range the stories cover, computed");
   assert.match(m, /at most 6/);
   assert.match(m, /quieter period/);
   assert.match(m, /1\. Acme releases Harness 2\.0/);
@@ -232,7 +232,7 @@ test("the writer request: the stories, no search, title and items", () => {
 
 test("the quiet note: title with the range, no items", () => {
   const n = quietNote(profile, "2026-11-02T08:00:00Z", NOW);
-  assert.equal(n.subject, "Harness Watch — 2 November 2026 – 9 November 2026");
+  assert.equal(n.subject, "Harness Watch — November 2–9, 2026");
   assert.match(n.markdown, /Nothing new met the bar/);
   assert.doesNotMatch(n.markdown, /^## \d+\./m);
 });
@@ -308,4 +308,30 @@ test("the writer request: limited link checks, several sources per item, trendin
   assert.match(m, /don't call other stories widely covered/);
   assert.match(m, /Merge stories about the same product/);
   assert.match(m, /about: acme harness/);
+});
+
+test("tool budgets: scout passes and issues are capped in code, other runs aren't", () => {
+  assert.equal(toolBudget("ai-swe--2026-11-09t1500"), undefined);
+  assert.equal(toolBudget("ai-swe--pool"), undefined);
+  const scout = toolBudget("harness-test--scout-2026-11-09t151355")!;
+  const used = { search: 0, fetch: 0 };
+  for (let k = 0; k < SCOUT_BUDGET; k++) assert.equal(spendTool(scout, used, k % 2 ? "/web_search" : "/web_search/contents"), undefined);
+  assert.match(spendTool(scout, used, "/web_search")!, /budget spent: 8 tool calls/);
+  assert.equal(used.search + used.fetch, SCOUT_BUDGET, "a refused call isn't counted");
+  assert.equal(spendTool(scout, used, "/ai/chat/completions"), undefined, "other platform calls pass");
+  const issue = toolBudget("harness-test--issue-2026-11-09t1524")!;
+  const u2 = { search: 0, fetch: 0 };
+  assert.match(spendTool(issue, u2, "/web_search")!, /no web searches/);
+  for (let k = 0; k < WRITER_CHECKS; k++) assert.equal(spendTool(issue, u2, "/web_search/contents"), undefined);
+  assert.match(spendTool(issue, u2, "/web_search/contents")!, /budget spent/);
+});
+
+test("date ranges read like a title", () => {
+  assert.equal(formatRange("2026-11-04", "2026-11-07"), "November 4–7, 2026");
+  assert.equal(formatRange("2026-11-07", "2026-11-04"), "November 4–7, 2026");
+  assert.equal(formatRange("2026-10-30", "2026-11-05"), "October 30 – November 5, 2026");
+  assert.equal(formatRange("2026-12-30", "2027-01-02"), "December 30, 2026 – January 2, 2027");
+  assert.equal(formatRange("2026-11-08", "2026-11-08"), "November 8, 2026");
+  assert.equal(storiesRange([{ published: "2026-11-06", firstSeen: NOW }, { firstSeen: "2026-11-04T10:00:00Z" }]), "November 4–6, 2026");
+  assert.equal(storiesRange([]), undefined);
 });

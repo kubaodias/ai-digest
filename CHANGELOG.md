@@ -20,6 +20,11 @@ All notable changes to this project are documented here. The format follows [Kee
 - `POST /v1/digests/<id>/runs` on a scouting digest runs a pass and then writes from its pool (`"scout": false` writes from the pool right away).
 - Storing a definition (`PUT`, so every `npm run digests -- push` and deploy) arms, re-arms or cancels its scout timer; the response includes `scouting`.
 - `GET /v1/digests` returns `scout` (the settings or null) instead of `schedule`.
+- Pictures: the same picture served at several sizes (`chart-medium.jpg`, `chart-small.jpg`, `chart-1024x576.png`) or under two names with the same shape in one folder is shown once, and a picture is never repeated in a later item of the same issue.
+- Scout passes and issues have a hard web tool budget, enforced in code: a pass's 9th call and an issue's 4th link check (or any web search) are refused and the model answers with what it has. The prompt alone was overrun (12–14 calls against 8).
+- Source lines say "Sources:" before several links and "Source:" before one, in every digest.
+- An issue's title gets its date range from the stories' publication dates ("November 4–7, 2026") instead of the writer's own wording; the quiet note uses the same format.
+- The writer looks for the maker's own page when a story only has third-party write-ups, and lists at least two sources when it calls a story widely covered.
 - Deleting a scouting digest also empties its pool, so a digest created later under the same name starts fresh (its stories used to come back).
 - `GET /v1/runs/<conversation>` answers 400 for a name that isn't a conversation instead of passing it to an actor (which failed with a 500).
 

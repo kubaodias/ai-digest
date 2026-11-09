@@ -135,7 +135,7 @@ The request, built by the pool actor (`scoutMessage` in `src/pool.ts`; wording i
 - the digest's description (what it covers, for whom, sources, what to leave out);
 - **since when to look:** the last pass's time minus an hour of overlap (the first pass: the digest's window);
 - **known stories:** the newest 60 pool headlines with their ids, and "skip these unless you have a better primary source or a new independent source";
-- **budget:** at most 8 tool calls, then answer;
+- **budget:** at most 8 tool calls, then answer. Phase 1 showed the prompt alone isn't enough (12–14 calls), so the agent counts web tool calls per run and refuses the rest (`toolBudget`, `spendTool`); the refusal reaches the model as the tool's error and it answers with what it has;
 - **answer format:** JSON only, no prose:
 
 ```json

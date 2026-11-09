@@ -14,6 +14,56 @@ export const WRITER_CHECKS = 3;
 /** Sources listed per item. */
 export const SOURCES_PER_ITEM = 3;
 
+/** What a run may spend on the web tools, by its conversation: scout passes and issues written from the pool. */
+export interface ToolBudget {
+  /** web_search and research calls. */
+  search: number;
+  /** fetch_page calls. */
+  fetch: number;
+  /** Both together. */
+  total: number;
+  what: string;
+}
+
+export function toolBudget(conversation: string): ToolBudget | undefined {
+  if (/--scout-[a-z0-9-]+$/.test(conversation)) return { search: SCOUT_BUDGET, fetch: SCOUT_BUDGET, total: SCOUT_BUDGET, what: "this scout pass" };
+  if (/--issue-[a-z0-9-]+$/.test(conversation)) return { search: 0, fetch: WRITER_CHECKS, total: WRITER_CHECKS, what: "writing this issue" };
+  return undefined;
+}
+
+/**
+ * Count one web tool call against a budget. Returns why it's refused (the model
+ * sees it as the tool's error and answers with what it has), or undefined and
+ * counts it. Paths are the TELNYX client's: /web_search, /web_search/contents, /web_search/research.
+ */
+export function spendTool(budget: ToolBudget, used: { search: number; fetch: number }, path: string): string | undefined {
+  const kind = /\/web_search\/contents/.test(path) ? "fetch" : /\/web_search/.test(path) ? "search" : undefined;
+  if (!kind) return undefined;
+  if (kind === "search" && budget.search === 0) return `no web searches when ${budget.what}: write from what you were given`;
+  if (used.search + used.fetch >= budget.total || used[kind] >= budget[kind]) {
+    return `budget spent: ${budget.total} tool calls is the limit for ${budget.what}. Don't call tools again; answer now with what you have`;
+  }
+  used[kind]++;
+  return undefined;
+}
+
+/** A date range as titles show it: "November 4–7, 2026", "October 30 – November 5, 2026". */
+export function formatRange(from: string, to: string): string {
+  const d = (iso: string) => new Date(iso.length === 10 ? `${iso}T12:00:00Z` : iso);
+  const [a, b] = [d(from), d(to)].sort((x, y) => x.getTime() - y.getTime()) as [Date, Date];
+  const month = (x: Date) => x.toLocaleDateString("en-US", { month: "long", timeZone: "UTC" });
+  const [ay, by, ad, bd] = [a.getUTCFullYear(), b.getUTCFullYear(), a.getUTCDate(), b.getUTCDate()];
+  if (ay !== by) return `${month(a)} ${ad}, ${ay} – ${month(b)} ${bd}, ${by}`;
+  if (month(a) !== month(b)) return `${month(a)} ${ad} – ${month(b)} ${bd}, ${by}`;
+  return ad === bd ? `${month(a)} ${ad}, ${ay}` : `${month(a)} ${ad}–${bd}, ${ay}`;
+}
+
+/** The range an issue's stories cover: their publication dates (else when they were found). */
+export function storiesRange(entries: Pick<PoolEntry, "published" | "firstSeen">[]): string | undefined {
+  const days = entries.map((e) => e.published ?? e.firstSeen.slice(0, 10)).filter((x) => /^\d{4}-\d{2}-\d{2}/.test(x)).sort();
+  return days.length ? formatRange(days[0]!, days[days.length - 1]!) : undefined;
+}
+
 const fence = "```";
 
 /** The request for one scout pass. */
@@ -44,7 +94,8 @@ export function scoutMessage(p: DigestProfile, opts: { since: string; until: str
 
 /** The request for an issue written from the pool's chosen stories. */
 export function writerMessage(p: DigestProfile, entries: PoolEntry[], opts: { quiet: boolean; focus?: string }): string {
-  const title = p.title.includes("{range}") ? p.title.replace("{range}", "<the date range the stories cover>") : p.title;
+  const range = storiesRange(entries);
+  const title = p.title.includes("{range}") ? p.title.replace("{range}", range ?? "<the date range the stories cover>") : p.title;
   const stories = entries.map((e, k) =>
     [
       `${k + 1}. ${e.headline}`,
@@ -58,10 +109,10 @@ export function writerMessage(p: DigestProfile, entries: PoolEntry[], opts: { qu
   );
   return [
     `WRITE AN ISSUE FROM THESE STORIES. Don't search the web and don't call reader_preferences: the stories were already found, checked and ranked. Use fetch_page at most ${WRITER_CHECKS} times, only for a story without a primary source or whose summary you doubt; drop a story whose link is dead or doesn't match. Never add stories that aren't listed.`,
-    `Sources: on each item's source line list the story's sources given below, up to ${SOURCES_PER_ITEM}, as "**Sources:** [site](url) · [site](url) · date" (one source: "**Source:**"). Order them: the maker's own page first (official post, changelog, paper, repository), then independent reporting, then discussion threads (Hacker News, Reddit); leave out link roundups and newsletters that only collect links. If a story's link is a third-party write-up but its sources include the maker's own page, base the item on the maker's page (a good use of a fetch_page check). Only for a story marked trending, say in "Why it matters" that it's widely covered (e.g. "covered by 4 outlets"); don't call other stories widely covered.`,
+    `Sources: on each item's source line list the story's sources given below, up to ${SOURCES_PER_ITEM}, as "**Sources:** [site](url) · [site](url) · date" (one source: "**Source:**"). Order them: the maker's own page first (official post, changelog, paper, repository), then independent reporting, then discussion threads (Hacker News, Reddit); leave out link roundups and newsletters that only collect links. If a story's link is a third-party write-up but its sources include the maker's own page, base the item on the maker's page. If none of a story's sources is the maker's own page (a paper, release, repository or announcement only reported by others), spend a fetch_page check on its best write-up to find the link to the original and list that first; leave it out if you don't find one. Only for a story marked trending, say in "Why it matters" that it's widely covered (e.g. "covered by 4 outlets"), and then list at least two of its sources; don't call other stories widely covered.`,
     `Merge stories about the same product into one item when they're parts of one update (e.g. consecutive releases): one headline, the combined substance, their sources together.`,
     ``,
-    `Title: ${title}`,
+    `Title: ${title}${range ? " (use it as given)" : ""}`,
     `Items: at most ${p.items.max}, in the order given unless merging duplicates. ${opts.quiet ? "This is the regular issue for a quieter period: fewer items are fine; don't pad." : ""}`.trim(),
     p.closing ? `Closing section: "## ${p.closing}" with 2–4 bullets connecting the items.` : `Closing section: none.`,
     ``,
@@ -78,8 +129,7 @@ export function writerMessage(p: DigestProfile, entries: PoolEntry[], opts: { qu
 
 /** The email for an issue that falls due with nothing in the pool. */
 export function quietNote(p: DigestProfile, since: string, until: string): { subject: string; markdown: string } {
-  const fmt = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
-  const range = `${fmt(since)} – ${fmt(until)}`;
+  const range = formatRange(since, until);
   const subject = p.title.includes("{range}") ? p.title.replace("{range}", range) : `${p.title} (${range})`;
   return { subject, markdown: `# ${subject}\n\nNothing new met the bar for this digest between ${range}. The next issue follows when there's more worth reading.\n` };
 }
