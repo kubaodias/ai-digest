@@ -15,8 +15,6 @@ Design specs and the decisions behind ai-digest, in the order they were made. Ea
 | 0009 | [One-off General digest and preferences shared between digests](0009-general-digest-and-shared-preferences.md) | accepted | 0.4.0 |
 | 0010 | [Continuous scouting](0010-continuous-scouting.md) | proposed | (0.5.0) |
 
-Also: [Telnyx platform notes](telnyx-platform-notes.md), what we learned about the platform while building this, with workarounds.
-
 ## Format
 
 ```

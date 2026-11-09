@@ -26,4 +26,4 @@ Every link the function produces has to be the address the reader uses: thumbs l
 
 - A deployment on a custom domain needs `PUBLIC_URL` set; without it, links point to the function's own address (still working, just not the custom one).
 - If the platform starts passing the original host, nothing breaks: `PUBLIC_URL` still wins.
-- Reported to Telnyx; see [platform notes](telnyx-platform-notes.md).
+- Reported to Telnyx.

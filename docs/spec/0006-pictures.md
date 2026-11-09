@@ -23,5 +23,5 @@ Text-only digests are hard to scan, and many stories have a figure that explains
 ## Consequences
 
 - About a third to a half of items get a picture; the rest stay text, which is fine.
-- The vision model's reasoning budget initially consumed the whole token limit and returned empty answers; `reasoning_effort: "none"` fixed it ([platform notes](telnyx-platform-notes.md)).
+- The vision model's reasoning budget initially consumed the whole token limit and returned empty answers; `reasoning_effort: "none"` fixed it.
 - Continuous scouting (0010) keeps this step at send time only: passes never fetch images.

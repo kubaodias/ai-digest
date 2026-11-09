@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- `docs/spec/`: decision records for the choices made so far (own entry point and v1 API, deterministic email, digest files, feedback and preferences, Agent Memory, pictures, security, public URL and custom domains, the General digest and shared preferences), notes on the Telnyx platform, and the proposed design for continuous scouting (not implemented).
+- `docs/spec/`: decision records for the choices made so far (own entry point and v1 API, deterministic email, digest files, feedback and preferences, Agent Memory, pictures, security, public URL and custom domains, the General digest and shared preferences) and the proposed design for continuous scouting (not implemented).
 
 ### Changed
 

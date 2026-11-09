@@ -21,5 +21,5 @@ The first version gave the research model an email tool. Sending then depended o
 ## Consequences
 
 - A run that produces a digest always sends exactly one email; a run that produces an answer, a question or an error sends nothing.
-- The Telnyx Email API silently drops unknown fields: our first emails had no body because the fields are `text_body` / `html_body` (and `to` is an array). The request shape is now covered by the code path every digest uses; see [platform notes](telnyx-platform-notes.md).
+- The Telnyx Email API silently drops unknown fields: our first emails had no body because the fields are `text_body` / `html_body` (and `to` is an array). The request shape is now covered by the code path every digest uses.
 - Anything that should happen to every issue (pictures, feedback links, registration) belongs in this hook, not in the prompt.
