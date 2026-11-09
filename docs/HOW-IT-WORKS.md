@@ -27,7 +27,9 @@ The agent class extends the managed agent loop from `@telnyx/acp` (harness, tool
 | `GET /v1/digests/<id>` | operator token | One definition (Markdown) |
 | `PUT /v1/digests/<id>` | operator token | Store a definition (body: Markdown); validated, the last 10 versions kept |
 | `DELETE /v1/digests/<id>` | operator token | Delete a definition (its issues, votes and memory stay) |
-| `POST /v1/digests/<id>/runs` | operator token | Start an issue: `{"message"?: "focus for this issue", "run"?: "name"}` → `202 {"conversation": …}` |
+| `POST /v1/digests/<id>/runs` | operator token | Start an issue: `{"message"?: "focus for this issue", "run"?: "name"}` → `202 {"conversation": …}`. A scouting digest runs a pass, then writes from its pool (`"scout": false`: from the pool now) |
+| `GET /v1/digests/<id>/pool` | operator token | A scouting digest's pool: timing, counts, the last decision, the candidates |
+| `POST /v1/digests/<id>/scout` | operator token | A scout pass now: `{"since"?, "until"?, "decide"?: false}` → `202 {"conversation": …}` |
 | `POST /v1/runs` | operator token | A one-off General digest: `{"topic": "…", "window"?: "14d", "items"?: "5-8", "run"?: "name"}` → `202 {"conversation": "__general--…"}` |
 | `GET /v1/runs/<conversation>` | operator token | The conversation's recent runs: `{"runs": [{status, durationMs, toolCalls, tokens, …}]}` |
 | `GET /v1/app`, `/v1/app/digests/<id>` | session cookie | The digests page (read-only) |
@@ -51,6 +53,16 @@ The operator token is `Authorization: Bearer <hex HMAC-SHA256 of "telnyx-acp ope
    - records `emailedAt`, so a retried hook doesn't send twice.
 
    The sender, default recipients and public URL come from secrets (`src/config.ts`), never from the model.
+
+## Scouting digests
+
+A digest with `scout:` ([spec 0010](spec/0010-continuous-scouting.md)) has a **pool actor**, `<digest>--pool`, that holds its candidate pool, owns its timer (a durable `every` task, re-armed whenever the definition is stored, so every deploy repairs it) and decides when to send. It never calls the model itself:
+
+1. **A pass** runs in its own conversation, `<digest>--scout-<time>`: a short research run (`scoutMessage` in `src/scout-instructions.ts`) that gets the window to look in (since the last pass, minus an hour) and the stories already known, and answers with JSON: new candidates, and the ids of known stories it saw again (`seen`).
+2. **Delivery:** the pass's post-run hook validates and tags the candidates and hands them to the pool through a durable task, retried until it lands. If the runtime restarts before the hook runs, the pool re-delivers the pass's reply the next time a pass is due (or gives it up when there's none).
+3. **The pool** (`src/pool.ts`) merges by canonical URL (or a model-suggested "same story" that shares an entity or most title words), counts sightings and sources, scores (importance, corroboration up to +2, sightings up to +1.5, primary source +0.5, your preferences, −1 per week of age), expires stories older than the window, and drops stories mainly about a product you don't use.
+4. **The decision:** an issue when `send_at` stories score at least `strong` and `min_gap` has passed; an issue anyway at `max_gap` (a short note if the pool is empty); otherwise nothing, with the reason shown in `pool` and on the page.
+5. **The issue** is written in `<digest>--issue-<time>` from the chosen stories only (`writerMessage`: no new search, links confirmed), then emailed by the usual post-run hook, with pictures picked at that point. The hook tells the pool which stories made it in; the others return to the pool.
 
 ## One-off digests (General)
 

@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- **Continuous scouting** ([spec 0010](docs/spec/0010-continuous-scouting.md), phase 1). A digest with `scout: 6h` (1h–24h) runs a short research pass at that interval and keeps what it finds in a candidate pool; an issue goes out when `send_at` stories score at least `strong` (and `min_gap` has passed), or at `max_gap` at the latest with whatever the pool holds (an empty pool sends a short "nothing new" note). Defaults: `send_at` = the lower bound of `items`, `strong: 7`, `min_gap: 2d`, `max_gap: 7d`.
+- The pool merges stories by canonical URL (or a model-suggested match that shares an entity or most title words), counts independent sources and repeat sightings (passes report known stories they see again), and scores them by importance, corroboration, sightings, primary source, your feedback (a product you don't use drops a story) and age. Stories older than the digest's `window` expire.
+- Issues are written from the chosen stories only, without new searching; pictures are picked at that point, never during passes. Stories the writer drops return to the pool.
+- `GET /v1/digests/<id>/pool`, `POST /v1/digests/<id>/scout` (`since`/`until` replay a past window, `decide: false` only fills the pool); `npm run digests -- pool <id>`, `scout <id> [--since] [--until] [--no-send]`, `run <id> [--no-scout]`; a scouting card on the digests page.
+- Robustness: a pass's candidates reach the pool through a durable, retried task; a pass whose reply never arrived (e.g. after a runtime restart) is re-delivered or given up the next time a pass is due; requests that start passes or issues return at once.
+
+### Changed
+
+- `POST /v1/digests/<id>/runs` on a scouting digest runs a pass and then writes from its pool (`"scout": false` writes from the pool right away).
+- Storing a definition (`PUT`, so every `npm run digests -- push` and deploy) arms, re-arms or cancels its scout timer; the response includes `scouting`.
+- `GET /v1/digests` returns `scout` (the settings or null) instead of `schedule`.
+
+### Removed
+
+- The `schedule:` setting (never active). A file that still has it gets an error pointing to `scout:`.
+
+### Added
+
 - `docs/spec/`: decision records for the choices made so far (own entry point and v1 API, deterministic email, digest files, feedback and preferences, Agent Memory, pictures, security, public URL and custom domains, the General digest and shared preferences) and the proposed design for continuous scouting (not implemented).
 
 ### Changed

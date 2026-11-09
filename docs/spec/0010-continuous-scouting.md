@@ -1,6 +1,6 @@
 # 0010. Continuous scouting
 
-Status: **proposed** (not implemented). Target: 0.5.0 (phase 1), 0.6.0 (phase 2), 0.7.0 (phase 3).
+Status: **accepted**: phase 1 shipped in 0.5.0; phases 2 (breaking alerts) and 3 (rising subjects) are proposed.
 
 ## Summary
 
