@@ -5,7 +5,12 @@
 //   pull [id…]                   download definitions into digests/
 //   show <id>                    print a stored definition
 //   delete <id>                  delete a stored definition (sent issues, votes and memory stay)
-//   run <id> [focus…] [--run N]  start a digest now; [focus] adds one-off guidance for this issue
+//   run <id> [focus…] [--run N] [--no-scout]
+//                                start a digest now; [focus] adds one-off guidance for this issue.
+//                                A scouting digest runs a pass, then writes from its pool (--no-scout: from the pool now)
+//   scout <id> [--since T] [--until T] [--no-send]
+//                                a scout pass now; --since/--until replay a past window; --no-send only fills the pool
+//   pool <id>                    a scouting digest's pool: timing, counts, the last decision, the candidates
 //   ask <topic…> [--window 14d] [--items 5-8] [--run N]
 //                                a one-off General digest on any topic, emailed to DIGEST_EMAIL_TO
 //   status <conversation>        a run's recent steps
@@ -20,6 +25,11 @@ import { agentApi, loadEnv, root } from "./lib.mjs";
 const env = loadEnv();
 const dir = join(root, "digests");
 const [cmd, ...rest] = process.argv.slice(2);
+const has = (name: string) => {
+  const i = rest.indexOf(name);
+  if (i !== -1) rest.splice(i, 1);
+  return i !== -1;
+};
 const flag = (name: string) => {
   const i = rest.indexOf(name);
   if (i === -1) return undefined;
@@ -44,7 +54,7 @@ async function main() {
           continue;
         }
         const items = d.items ? `${d.items.min}-${d.items.max} items` : "";
-        console.log(`${d.id.padEnd(22)} ${(d.title ?? "(invalid)").padEnd(48)} ${String(d.windowDays ?? "?").padStart(2)}d  ${items.padEnd(11)} ${d.schedule ?? ""}`);
+        console.log(`${d.id.padEnd(22)} ${(d.title ?? "(invalid)").padEnd(48)} ${String(d.windowDays ?? "?").padStart(2)}d  ${items.padEnd(11)} ${d.scout ? `scouts every ${d.scout.scoutHours}h` : ""}`);
       }
       return;
     }
@@ -87,10 +97,14 @@ async function main() {
     }
     case "run": {
       const runName = flag("--run");
+      const noScout = has("--no-scout");
       const [id, ...focus] = rest;
-      if (!id) fail("Usage: npm run digests -- run <id> [focus for this issue] [--run <name>]");
-      const r = await agentApi(env, "POST", `/v1/digests/${id}/runs`, { ...(runName ? { run: runName } : {}), ...(focus.length ? { message: focus.join(" ") } : {}) });
-      console.log(`Started ${r.digest} in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
+      if (!id) fail("Usage: npm run digests -- run <id> [focus for this issue] [--run <name>] [--no-scout]");
+      const r = await agentApi(env, "POST", `/v1/digests/${id}/runs`, { ...(runName ? { run: runName } : {}), ...(focus.length ? { message: focus.join(" ") } : {}), ...(noScout ? { scout: false } : {}) });
+      if (r.ok === false) fail(r.error);
+      if (r.mode === "scout-then-write") console.log(`Started a scout pass for ${r.digest} (${r.conversation}); an issue is written from the pool when it's done.`);
+      else if (r.mode === "from-pool") console.log(r.conversation ? `Writing ${r.digest} from its pool (${r.stories} stories) in ${r.conversation}.` : `The pool was empty: a short "nothing new" issue was sent.`);
+      else console.log(`Started ${r.digest} in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
       console.log(`Follow it: npm run digests -- status ${r.conversation}`);
       return;
     }
@@ -103,6 +117,33 @@ async function main() {
       const r = await agentApi(env, "POST", "/v1/runs", { topic, ...(window ? { window } : {}), ...(items ? { items } : {}), ...(runName ? { run: runName } : {}) });
       console.log(`Started a General digest on "${r.topic}" in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
       console.log(`Follow it: npm run digests -- status ${r.conversation}`);
+      return;
+    }
+    case "scout": {
+      const since = flag("--since");
+      const until = flag("--until");
+      const noSend = has("--no-send");
+      const id = rest[0];
+      if (!id) fail("Usage: npm run digests -- scout <id> [--since 2026-11-02] [--until 2026-11-04] [--no-send]");
+      const r = await agentApi(env, "POST", `/v1/digests/${id}/scout`, { ...(since ? { since } : {}), ...(until ? { until } : {}), ...(noSend ? { decide: false } : {}) }).catch((e: Error) => fail(e.message));
+      if (r.ok === false) fail(`${r.error}${r.conversation ? ` (${r.conversation})` : ""}`);
+      console.log(`Scout pass started in ${r.conversation}, ${r.since.slice(0, 16)} → ${r.until.slice(0, 16)} UTC.${noSend ? " It only fills the pool." : ""}`);
+      console.log(`Then: npm run digests -- pool ${id}`);
+      return;
+    }
+    case "pool": {
+      const id = rest[0];
+      if (!id) fail("Usage: npm run digests -- pool <id>");
+      const v = await agentApi(env, "GET", `/v1/digests/${id}/pool`);
+      const t = (iso: string | null) => (iso ? iso.slice(0, 16).replace("T", " ") + " UTC" : "—");
+      if (!v.scout) console.log(`${id} doesn't scout (no "scout:" in its definition).`);
+      console.log(`passes ${v.passes} · last ${t(v.lastPassAt)}${v.passRunning ? " (one running)" : ""} · next ${t(v.nextPassAt)} · last issue ${t(v.lastIssueAt)}${v.issueRunning ? " (one being written)" : ""}`);
+      console.log(`pool: ${v.counts.strong} strong · ${v.counts.candidates} candidates · ${v.counts.reserved} reserved · ${v.counts.sent} sent · ${v.counts.expired} expired`);
+      if (v.lastDecision) console.log(`decision: ${v.lastDecision.action} — ${v.lastDecision.reason}${v.lastDecision.dueBy ? ` (an issue by ${t(v.lastDecision.dueBy)} at the latest)` : ""}`);
+      for (const e of v.entries) {
+        const mark = { candidate: " ", reserved: "R", sent: "S", expired: "x" }[e.state as string] ?? "?";
+        console.log(`${mark} ${e.score.toFixed(1).padStart(4)}  imp ${String(e.importance).padStart(2)}  ${String(e.sources.length).padStart(2)} src  ${String(e.sightings).padStart(2)}×  ${e.headline.slice(0, 90)}${e.dropped ? `  [${e.dropped}]` : ""}`);
+      }
       return;
     }
     case "status": {

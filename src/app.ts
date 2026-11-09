@@ -87,7 +87,7 @@ export interface DigestSummary {
   title: string | null;
   windowDays: number | null;
   items: { min: number; max: number } | null;
-  schedule: string | null;
+  scout: DigestProfile["scout"] | null;
   updatedAt: string;
   versions: number;
 }
@@ -129,7 +129,12 @@ function settings(p: DigestProfile): string {
     ["Closing section", p.closing ? esc(p.closing) : "none"],
     ["Pictures", p.images ? "on" : "off"],
     ["Recipients", p.to.length ? p.to.map(esc).join(", ") : "default (DIGEST_EMAIL_TO)"],
-    ["Schedule", p.schedule ? `${esc(p.schedule)} <span class="faint">(not active yet)</span>` : "manual (npm run digests -- run)"],
+    [
+      "Scouting",
+      p.scout
+        ? `every ${p.scout.scoutHours} h · an issue at ${p.scout.sendAt} stories scoring ${p.scout.strong}+ (at most every ${p.scout.minGapDays} d), at least every ${p.scout.maxGapDays} d`
+        : "off: issues on request (npm run digests -- run)",
+    ],
   ];
   return `<table class="kv">${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</table>`;
 }
@@ -170,7 +175,7 @@ export function listPage(digests: DigestSummary[], overview: Overview, memory: R
   const cards = digests
     .map((d) => {
       const last = overview.issues.find((i) => i.profile === d.id);
-      const shape = d.windowDays && d.items ? `${d.windowDays} days · ${d.items.min === d.items.max ? d.items.min : `${d.items.min}–${d.items.max}`} items${d.schedule ? ` · ${esc(d.schedule)}` : ""}` : "";
+      const shape = d.windowDays && d.items ? `${d.windowDays} days · ${d.items.min === d.items.max ? d.items.min : `${d.items.min}–${d.items.max}`} items${d.scout ? ` · scouts every ${d.scout.scoutHours} h` : ""}` : "";
       return `<a class="card" href="${APP}/digests/${d.id}" style="text-decoration:none;color:inherit">
   <span class="id">${esc(d.id)}</span>
   <h2>${d.title ? esc(d.title.replace("{range}", "…").replace(/\s*—\s*…$/, "")) : `<span class="less">Invalid definition</span>`}</h2>
@@ -183,7 +188,49 @@ export function listPage(digests: DigestSummary[], overview: Overview, memory: R
   return page("Your digests", chrome(`${empty}<div class="grid">${cards}${generalCard(overview, memory)}</div>`), 200, { css, wide: true });
 }
 
+/** What the pool actor's poolView() returns (the parts the page shows). */
+export interface PoolView {
+  scout: { strong: number; sendAt: number; maxGapDays: number } | null;
+  nextPassAt: string | null;
+  lastPassAt: string | null;
+  passes: number;
+  passRunning: { slot: string } | null;
+  lastIssueAt: string | null;
+  issueRunning: { slot: string } | null;
+  lastDecision: { action: string; reason: string; dueBy?: string } | null;
+  counts: { candidates: number; strong: number; sent: number; expired: number };
+  entries: { headline: string; url: string; source: string; score: number; state: string; sightings: number; sources: unknown[] }[];
+}
+
+const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC";
+
+/** The pool card on a scouting digest's page: timing, counts, why no issue yet, the strongest candidates. */
+export function poolCard(v: PoolView): string {
+  const d = v.lastDecision;
+  const status = v.issueRunning
+    ? "An issue is being written now."
+    : d?.action === "none"
+      ? `No issue yet: ${esc(d.reason)}${d.dueBy ? `. An issue by ${when(d.dueBy)} at the latest.` : "."}`
+      : d
+        ? `Last decision: ${esc(d.action)} (${esc(d.reason)}).`
+        : "No pass yet.";
+  const rows = v.entries
+    .filter((e) => e.state === "candidate")
+    .slice(0, 8)
+    .map((e) => `<tr><td class="n" style="text-align:left;padding:0 10px 0 0">${e.score.toFixed(1)}</td><td><a href="${esc(e.url)}">${esc(e.headline)}</a> <span class="faint">· ${esc(e.source)}${e.sources.length > 1 ? ` +${e.sources.length - 1}` : ""}${e.sightings > 1 ? ` · seen ${e.sightings}×` : ""}</span></td></tr>`)
+    .join("");
+  return `<div class="card"><p class="label">Scouting · ${v.passes} pass${v.passes === 1 ? "" : "es"}</p>
+<table class="kv">
+<tr><td>Pool</td><td>${v.counts.strong} strong (score ${v.scout?.strong ?? 7}+, ${v.scout?.sendAt ?? "?"} needed) · ${v.counts.candidates} candidates · ${v.counts.sent} sent · ${v.counts.expired} expired</td></tr>
+<tr><td>Last pass</td><td>${v.passRunning ? "running now" : v.lastPassAt ? when(v.lastPassAt) : "none yet"}${v.nextPassAt ? ` · next ${when(v.nextPassAt)}` : ""}</td></tr>
+<tr><td>Last issue</td><td>${v.lastIssueAt ? when(v.lastIssueAt) : "none yet"}</td></tr>
+<tr><td>Status</td><td>${status}</td></tr>
+</table>
+${rows ? `<p class="label" style="margin-top:14px">Strongest candidates</p><table>${rows}</table>` : ""}</div>`;
+}
+
 export interface DigestPageData {
+  pool?: PoolView | null;
   digest: StoredDigest;
   issues: { issue: IssueSummary; view?: string }[];
   prefs: Preferences;
@@ -212,6 +259,7 @@ export function digestPage(d: DigestPageData): Response {
 ${p ? settings(p) : `<p class="less">${esc(invalid)}</p>`}</div>
 ${p ? `<div class="card"><p class="label">What it covers</p><div class="desc">${marked.parse(p.description, { async: false }) as string}</div>
 <details><summary>Definition file</summary><pre>${esc(d.digest.markdown)}</pre></details></div>` : ""}
+${d.pool ? poolCard(d.pool) : ""}
 <div class="card"><p class="label">Recent issues</p>${issues}</div>
 <div class="card"><p class="label">Learned from your votes · ${d.prefs.votes} vote${d.prefs.votes === 1 ? "" : "s"}</p>
 <table class="kv"><tr><td>Products &amp; companies</td><td>${pref(d.prefs.entities)}</td></tr>
@@ -265,6 +313,15 @@ ${d.memorySummary ? `<div class="memory">${marked.parse(d.memorySummary, { async
   );
 }
 
+/** Whether a stored definition scouts (an invalid one doesn't). */
+function parseScouting(markdown: string, id: string): boolean {
+  try {
+    return !!parseProfile(id, markdown).scout;
+  } catch {
+    return false;
+  }
+}
+
 // ── the routes ───────────────────────────────────────────────────────────────
 
 export interface AppDeps {
@@ -277,6 +334,8 @@ export interface AppDeps {
   digests: { listDigests(): Promise<DigestSummary[]>; getDigest(id: string): Promise<StoredDigest | null>; magicRequested(now: number): Promise<{ ok: boolean; retryIn?: number }>; consumeMagic(nonce: string, exp: number): Promise<boolean> };
   feedback: { appOverview(): Promise<Overview>; feedbackStats(profile: string): Promise<Preferences> };
   memory: { counts(): Promise<Record<string, number>>; summary(profile: string): Promise<string | null> };
+  /** A scouting digest's pool (optional: pages work without it). */
+  pool?(id: string): Promise<PoolView | null>;
   sendEmail(to: string, subject: string, text: string, html: string): Promise<void>;
   now?: () => number;
 }
@@ -341,7 +400,8 @@ export async function app(req: Request, deps: AppDeps): Promise<Response> {
       overview.issues.filter((i) => i.profile === id).slice(0, 12).map(async (issue) => ({ issue, view: deps.feedbackKey ? await viewLink(deps.feedbackKey, base, issue.id) : undefined })),
     );
     if (!digest) return generalPage({ issues, prefs, memorySummary, memoryCount: counts[id] ?? 0 });
-    return digestPage({ digest, issues, prefs, memorySummary, memoryCount: counts[id] ?? 0 });
+    const pool = parseScouting(digest.markdown, id) && deps.pool ? await deps.pool(id).catch(() => null) : null;
+    return digestPage({ digest, issues, prefs, memorySummary, memoryCount: counts[id] ?? 0, pool });
   }
   return errorPage(404, "That page doesn't exist.");
 }

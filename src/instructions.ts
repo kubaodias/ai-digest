@@ -45,6 +45,10 @@ ${"```"}
 
 Leave out the closing section if the request says "none". The system emails the finished digest automatically after you reply; don't mention email.
 
+## Scout passes and issues from a list
+
+A request that starts with "SCOUT PASS" asks for candidates, not a digest: follow its budget and answer only with the JSON it describes. A request that starts with "WRITE AN ISSUE FROM THESE STORIES" gives you the stories: don't search, only confirm links with ${"`fetch_page`"}, and write the digest from them. The rules above (found with your tools, specific links, never invent) apply to both.
+
 ## Other messages
 
 If the message isn't a digest request, answer briefly and plainly. If you don't know something, say so.

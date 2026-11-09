@@ -21,8 +21,8 @@ function deps(over: Partial<AppDeps> = {}) {
     digests: {
       // The real shape: the digests actor's listDigests() returns summaries, not definition text.
       listDigests: async () => [
-        { id: "agent-memory", title: "Agent Memory Weekly — {range}", windowDays: 14, items: { min: 5, max: 10 }, schedule: null, updatedAt: "2026-11-07T22:00:00Z", versions: 2 },
-        { id: "broken", title: null, windowDays: null, items: null, schedule: null, updatedAt: "2026-11-07T22:00:00Z", versions: 1 },
+        { id: "agent-memory", title: "Agent Memory Weekly — {range}", windowDays: 14, items: { min: 5, max: 10 }, scout: null, updatedAt: "2026-11-07T22:00:00Z", versions: 2 },
+        { id: "broken", title: null, windowDays: null, items: null, scout: null, updatedAt: "2026-11-07T22:00:00Z", versions: 1 },
       ],
       getDigest: async (id) => (id === "agent-memory" ? { id, markdown: example, updatedAt: "2026-11-07T22:00:00Z", versions: 2 } : null),
       magicRequested: async (now) => (now - lastMagic < 60_000 ? { ok: false, retryIn: 42 } : ((lastMagic = now), { ok: true })),
@@ -188,4 +188,41 @@ test("a digest's page no longer lists sources", async () => {
   const { d } = deps();
   const html = await (await app(get("/v1/app/digests/agent-memory", await sessionFor()), d)).text();
   assert.doesNotMatch(html, /<td>Sources<\/td>/);
+});
+
+test("a scouting digest's page shows its pool: timing, counts, why no issue yet, the strongest candidates", async () => {
+  const scouting = example.replace(/^---\n/, "---\nscout: 6h\nsend_at: 4\n");
+  const view = {
+    scout: { strong: 7, sendAt: 4, maxGapDays: 7 },
+    nextPassAt: "2026-11-09T18:00:00Z",
+    lastPassAt: "2026-11-09T12:00:00Z",
+    passes: 3,
+    passRunning: null,
+    lastIssueAt: null,
+    issueRunning: null,
+    lastDecision: { action: "none", reason: "2 of 4 strong stories", dueBy: "2026-11-16T12:00:00Z" },
+    counts: { candidates: 5, strong: 2, sent: 0, expired: 1 },
+    entries: [
+      { headline: "Zep ships temporal graphs", url: "https://zep.example.com/x", source: "zep.example.com", score: 8.5, state: "candidate", sightings: 2, sources: [1, 2] },
+      { headline: "Old news", url: "https://x.example.com/", source: "x.example.com", score: 3, state: "expired", sightings: 1, sources: [1] },
+    ],
+  };
+  const asked: string[] = [];
+  const { d } = deps({
+    digests: { ...deps().d.digests, getDigest: async (id) => ({ id, markdown: scouting, updatedAt: "2026-11-07T22:00:00Z", versions: 3 }) },
+    pool: async (id) => (asked.push(id), view),
+  });
+  const html = await (await app(get("/v1/app/digests/agent-memory", await sessionFor()), d)).text();
+  assert.deepEqual(asked, ["agent-memory"]);
+  assert.match(html, /every 6 h · an issue at 4 stories scoring 7\+/);
+  assert.match(html, /Scouting · 3 passes/);
+  assert.match(html, /2 strong \(score 7\+, 4 needed\) · 5 candidates/);
+  assert.match(html, /No issue yet: 2 of 4 strong stories\. An issue by 16 Nov, 12:00 UTC at the latest\./);
+  assert.match(html, /8\.5<\/td><td><a href="https:\/\/zep\.example\.com\/x">Zep ships temporal graphs<\/a> <span class="faint">· zep\.example\.com \+1 · seen 2×/);
+  assert.doesNotMatch(html, /Old news/, "only live candidates are listed");
+  const plain = deps({ pool: async (id) => (asked.push(`plain:${id}`), view) }).d;
+  const off = await (await app(get("/v1/app/digests/agent-memory", await sessionFor()), plain)).text();
+  assert.match(off, /off: issues on request/);
+  assert.doesNotMatch(off, /Scouting ·/);
+  assert.ok(!asked.includes("plain:agent-memory"), "no pool lookup for a digest that doesn't scout");
 });

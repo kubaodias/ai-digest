@@ -11,6 +11,11 @@ import { SECRET, loadConfig, secret } from "./config.ts";
 import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
 import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
+  canonicalUrl, decide, housekeep, mergeCandidates, parseScoutReply, rescore, scoutSettings, slotOf,
+  type Candidate, type Decision, type PoolEntry,
+} from "./pool.ts";
+import { quietNote, scoutMessage, writerMessage } from "./scout-instructions.ts";
+import {
   FEEDBACK_CONVERSATION, KEEP_DIGESTS, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
 } from "./feedback.ts";
@@ -21,6 +26,9 @@ import {
 // instance of this class: "<digest>--<run>" for runs (the built-in General
 // digest's runs are "__general--<run>" and keep their topic in state), plus two
 // service actors, "feedback" (votes, sent issues) and "digests" (the definitions).
+// A digest with `scout:` also has a pool actor, "<digest>--pool", which runs
+// scout passes ("<digest>--scout-<slot>") and writes issues from its pool
+// ("<digest>--issue-<slot>"); see pool.ts and docs/spec/0010-continuous-scouting.md.
 // Account-specific settings are Telnyx secrets: see config.ts.
 
 /** The service actor that stores the digest definitions. */
@@ -83,6 +91,12 @@ async function feedbackKey(env: ManagedEnv): Promise<string | undefined> {
 /** The service actors, reached in-process. */
 const feedbackActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
 const digestsActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(DIGESTS_CONVERSATION);
+/** A digest's pool actor (continuous scouting). */
+export const poolConversation = (digest: string) => `${digest}--pool`;
+const poolActor = (env: ManagedEnv, digest: string) => (env as any).AI_DIGEST.idFromName(poolConversation(digest));
+const DAY_MS = 24 * 3600 * 1000;
+/** A scout pass still counts as running for this long (then a new one may start). */
+const PASS_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** A digest's definition, parsed; undefined when it isn't stored (or is invalid). */
 async function loadProfile(env: ManagedEnv, id: string): Promise<DigestProfile | undefined> {
@@ -254,6 +268,242 @@ export class AiDigest extends ManagedAgent {
     }
   }
 
+  // ── continuous scouting: the run side (scout passes and issues) ──
+
+  /** A scout pass's window, stored in its conversation before the request (called in-process by the pool actor). */
+  async prepareScoutRun(run: { digest: string; slot: string; since: string; until: string }) {
+    await (this as any).setState({ scoutRun: run });
+  }
+
+  /** An issue run's slot and stories, stored before the request (called in-process by the pool actor). */
+  async prepareIssueRun(run: { slot: string; ids: string[] }) {
+    await (this as any).setState({ issueRun: run });
+  }
+
+  /** A scout pass finished: validate and tag its candidates and hand them to the pool. */
+  private async deliverScoutReply(reply: string, run: { digest: string; slot: string; since: string; until: string }) {
+    const { candidates, dropped } = parseScoutReply(reply, run);
+    const tags = await tagItems(this.agentEnv.TELNYX as any, candidates.map((c) => ({ headline: c.headline, why: c.summary || c.why })));
+    const tagged: Candidate[] = candidates.map((c, k) => ({ ...c, tags: tags[k]?.tags ?? [], entities: tags[k]?.entities ?? [] }));
+    console.log(JSON.stringify({ scout: "pass done", digest: run.digest, slot: run.slot, candidates: tagged.length, dropped }));
+    await poolActor(this.agentEnv, run.digest).addCandidates({ slot: run.slot, candidates: tagged, dropped });
+  }
+
+  // ── continuous scouting: the pool actor, "<digest>--pool" ──
+
+  private poolDigest(): string {
+    const id = profileIdOf(this.conversationName());
+    if (!id || this.conversationName() !== poolConversation(id)) throw new Error("not a pool actor");
+    return id;
+  }
+
+  private async poolState(): Promise<{ entries: PoolEntry[]; meta: any }> {
+    const state: any = await (this as any).getState();
+    return { entries: Object.values(state?.poolEntries ?? {}).filter(Boolean) as PoolEntry[], meta: state?.poolMeta ?? {} };
+  }
+
+  /** Store the pool (only what changed) and merge `meta` into poolMeta. */
+  private async savePool(before: PoolEntry[], after: PoolEntry[], meta: Record<string, unknown>) {
+    const old = new Map(before.map((e) => [e.id, JSON.stringify(e)]));
+    const patch: Record<string, PoolEntry | null> = {};
+    for (const e of after) if (old.get(e.id) !== JSON.stringify(e)) patch[e.id] = e;
+    for (const id of old.keys()) if (!after.some((e) => e.id === id)) patch[id] = null;
+    await (this as any).setState({ poolEntries: patch, poolMeta: meta });
+  }
+
+  /**
+   * Arm or cancel this digest's scout timer from its definition: called when a
+   * definition is stored or deleted, and by every deploy (which pushes every
+   * definition), so a lost timer comes back. The first pass runs a minute after
+   * scouting is turned on.
+   */
+  async poolConfigure() {
+    const id = this.poolDigest();
+    const s = scoutSettings(await loadProfile(this.agentEnv, id));
+    const { meta } = await this.poolState();
+    if (!s) {
+      await (this as any).cancelSchedule("scout").catch(() => false);
+      await (this as any).cancelSchedule("scout-first").catch(() => false);
+      if (meta.enabledAt) await (this as any).setState({ poolMeta: { enabledAt: null } });
+      return { digest: id, scouting: false };
+    }
+    await (this as any).every(s.scoutHours * 3600, "scoutTick", {}, { id: "scout" });
+    if (!meta.enabledAt) {
+      const now = new Date().toISOString();
+      await (this as any).setState({ poolMeta: { enabledAt: now, lastIssueAt: meta.lastIssueAt ?? now } });
+      await (this as any).schedule(60, "scoutTick", {}, { id: "scout-first" });
+    }
+    return { digest: id, scouting: true, everyHours: s.scoutHours };
+  }
+
+  /** The timer's tick: one scout pass, unless one is still running. */
+  async scoutTick() {
+    await this.startPass({}).catch((err: unknown) => console.log(JSON.stringify({ scout: "tick failed", error: err instanceof Error ? err.message : String(err) })));
+  }
+
+  /**
+   * Start a scout pass now (called in-process by the router, and by the timer).
+   * `since`/`until` set the window (e.g. to replay past days); `decide: false`
+   * only fills the pool; `force` writes an issue after the pass whatever the
+   * thresholds say (a manual run), with an optional focus.
+   */
+  async startPass(opts: { since?: string; until?: string; decide?: boolean; force?: { focus?: string } }) {
+    const id = this.poolDigest();
+    const profile = await loadProfile(this.agentEnv, id);
+    if (!scoutSettings(profile)) return { ok: false, error: `"${id}" doesn't scout: add "scout: 6h" to its definition` };
+    const { entries, meta } = await this.poolState();
+    const now = new Date();
+    if (meta.passRunning && now.getTime() - Date.parse(meta.passRunning.startedAt) < PASS_TIMEOUT_MS) {
+      console.log(JSON.stringify({ scout: "skipped", digest: id, reason: "a pass is running", running: meta.passRunning.slot }));
+      return { ok: false, error: "a scout pass is already running", conversation: `${id}--scout-${meta.passRunning.slot}` };
+    }
+    const until = opts.until ?? now.toISOString();
+    const since = opts.since ?? (meta.lastPassAt ? new Date(Date.parse(meta.lastPassAt) - 3600_000).toISOString() : new Date(Date.parse(until) - profile!.windowDays * DAY_MS).toISOString());
+    const slot = now.toISOString().slice(0, 19).replace(/[:]/g, "").toLowerCase();
+    const conversation = `${id}--scout-${slot}`;
+    const known = entries
+      .filter((e) => e.state !== "expired")
+      .sort((a, b) => b.firstSeen.localeCompare(a.firstSeen))
+      .map((e) => ({ id: e.id, headline: e.headline }));
+    await (this as any).setState({ poolMeta: { passRunning: { slot, startedAt: now.toISOString(), since, until, decide: opts.decide ?? true, force: opts.force ?? null } } });
+    const run = (this.agentEnv as any).AI_DIGEST.idFromName(conversation);
+    await run.prepareScoutRun({ digest: id, slot, since, until });
+    await run.receive(scoutMessage(profile!, { since, until, known }));
+    console.log(JSON.stringify({ scout: "pass started", digest: id, conversation, since, until }));
+    return { ok: true, conversation, since, until };
+  }
+
+  /** A scout pass's candidates (from its conversation's post-run hook): merge, score, decide. */
+  async addCandidates(p: { slot: string; candidates: Candidate[]; dropped: number }) {
+    const id = this.poolDigest();
+    const { entries, meta } = await this.poolState();
+    if (meta.lastPassSlot === p.slot) return { duplicate: true }; // at-least-once delivery
+    const profile = await loadProfile(this.agentEnv, id);
+    const run = meta.passRunning?.slot === p.slot ? meta.passRunning : undefined;
+    const now = new Date().toISOString();
+    const merged = mergeCandidates(entries, p.candidates, now);
+    const pool = await this.refreshed(id, merged.pool, profile, now);
+    const pass = { slot: p.slot, at: now, since: run?.since, until: run?.until, added: merged.added, merged: merged.merged, dropped: p.dropped };
+    const decision = profile && run?.decide !== false ? this.decision(pool, profile, meta, now, !!run?.force) : undefined;
+    await this.savePool(entries, pool, {
+      // A replayed pass (an `until` in the past) never moves the clock back.
+      lastPassAt: [meta.lastPassAt, run?.until ?? now].filter(Boolean).sort().pop(),
+      lastPassSlot: p.slot,
+      passRunning: null,
+      lastPass: pass,
+      passes: (meta.passes ?? 0) + 1,
+      ...(decision ? { lastDecision: { ...decision, at: now } } : {}),
+    });
+    console.log(JSON.stringify({ pool: "merged", digest: id, ...pass, live: pool.filter((e) => e.state === "candidate").length, decision: decision?.action ?? "skipped", reason: decision?.reason }));
+    if (decision && decision.action !== "none" && profile) await this.startIssue(id, profile, pool, decision, meta, run?.force?.focus);
+    return { added: merged.added, merged: merged.merged, decision: decision?.action ?? "skipped" };
+  }
+
+  /** Write an issue from the pool now, without a scout pass (a manual run with scouting off for this run). */
+  async writeNow(opts: { focus?: string } = {}) {
+    const id = this.poolDigest();
+    const profile = await loadProfile(this.agentEnv, id);
+    if (!profile) return { ok: false, error: `no digest "${id}"` };
+    const { entries, meta } = await this.poolState();
+    const now = new Date().toISOString();
+    const pool = await this.refreshed(id, entries, profile, now);
+    const decision = this.decision(pool, profile, meta, now, true);
+    await this.savePool(entries, pool, { lastDecision: { ...decision, at: now } });
+    return { ok: true, ...(await this.startIssue(id, profile, pool, decision, meta, opts.focus)) };
+  }
+
+  /** Re-score with the reader's current preferences, then expire and trim. */
+  private async refreshed(id: string, pool: PoolEntry[], profile: DigestProfile | undefined, now: string): Promise<PoolEntry[]> {
+    const fb = feedbackActor(this.agentEnv);
+    const [prefs, shared] = await Promise.all([fb.feedbackStats(id).catch(() => undefined), fb.sharedPreferences(id).catch(() => undefined)]);
+    return housekeep(rescore(pool, prefs, shared, now), profile?.windowDays ?? 7, now);
+  }
+
+  private decision(pool: PoolEntry[], profile: DigestProfile, meta: any, now: string, force: boolean): Decision {
+    const s = scoutSettings(profile) ?? { scoutHours: 24, sendAt: profile.items.min, strong: 7, minGapDays: 0, maxGapDays: 30 };
+    return decide(pool, s, meta.lastIssueAt ?? meta.enabledAt ?? now, now, profile.items.max, force);
+  }
+
+  /** Reserve the chosen stories and start the writer run (or email the quiet note when there are none). */
+  private async startIssue(id: string, profile: DigestProfile, pool: PoolEntry[], d: Decision, meta: any, focus?: string) {
+    const now = new Date().toISOString();
+    const ids = d.action === "none" ? [] : d.ids;
+    if (!ids.length) {
+      const note = quietNote(profile, meta.lastIssueAt ?? meta.enabledAt ?? now, now);
+      const r = await sendDigestEmail(this.agentEnv, { ...note, profileId: id, profile });
+      await (this as any).setState({ poolMeta: { lastIssueAt: now, lastIssue: { slot: slotOf(now), at: now, stories: 0, quiet: true } } });
+      console.log(JSON.stringify({ pool: "quiet note", digest: id, ok: r.ok }));
+      return { conversation: null, stories: 0 };
+    }
+    const slot = slotOf(now);
+    const conversation = `${id}--issue-${slot}`;
+    const chosen = ids.map((x) => pool.find((e) => e.id === x)!).filter(Boolean);
+    const reserved = pool.map((e) => (ids.includes(e.id) ? { ...e, state: "reserved" as const, issue: slot, reservedAt: now } : e));
+    await this.savePool(pool, reserved, { issueRunning: { slot, startedAt: now, stories: ids.length } });
+    const run = (this.agentEnv as any).AI_DIGEST.idFromName(conversation);
+    await run.prepareIssueRun({ slot, ids });
+    const s = scoutSettings(profile);
+    await run.receive(writerMessage(profile, chosen, { quiet: d.action === "issue-anyway" && !!s && d.strong < s.sendAt, focus }));
+    console.log(JSON.stringify({ pool: "issue started", digest: id, conversation, stories: ids.length, reason: d.reason }));
+    return { conversation, stories: ids.length };
+  }
+
+  /** The writer's email went out: its stories are sent, the ones it dropped return to the pool. */
+  async markSent(p: { slot: string; urls: string[] }) {
+    const { entries, meta } = await this.poolState();
+    if (meta.lastIssue?.slot === p.slot) return { duplicate: true };
+    const linked = new Set(p.urls.map((u) => canonicalUrl(u)).filter(Boolean));
+    const now = new Date().toISOString();
+    let sent = 0;
+    const after = entries.map((e) => {
+      if (e.state !== "reserved" || e.issue !== p.slot) return e;
+      const inIssue = [e.url, ...e.sources.map((s) => s.url)].some((u) => linked.has(canonicalUrl(u)));
+      if (inIssue) {
+        sent++;
+        return { ...e, state: "sent" as const, sentAt: now };
+      }
+      const { issue: _i, reservedAt: _r, ...rest } = e;
+      return { ...rest, state: "candidate" as const };
+    });
+    await this.savePool(entries, after, { lastIssueAt: now, issueRunning: null, lastIssue: { slot: p.slot, at: now, stories: sent } });
+    console.log(JSON.stringify({ pool: "issue sent", digest: this.poolDigest(), slot: p.slot, sent }));
+    return { sent };
+  }
+
+  /** The pool for the API and the page: settings, timing, the last decision and the entries (live first). */
+  async poolView() {
+    const id = this.poolDigest();
+    const profile = await loadProfile(this.agentEnv, id);
+    const { entries, meta } = await this.poolState();
+    const tasks: any[] = await (this as any).listSchedules().catch(() => []);
+    const next = tasks.filter((t) => t.name === "scoutTick").map((t) => t.dueAt ?? t.due ?? t.at ?? t.nextAt).filter(Boolean).sort()[0];
+    const order: Record<string, number> = { candidate: 0, reserved: 1, sent: 2, expired: 3 };
+    const sorted = [...entries].sort((a, b) => order[a.state]! - order[b.state]! || b.score - a.score);
+    const s = scoutSettings(profile);
+    return {
+      digest: id,
+      scout: s ?? null,
+      nextPassAt: next ? new Date(typeof next === "number" ? next : Date.parse(next)).toISOString() : null,
+      enabledAt: meta.enabledAt ?? null,
+      lastPassAt: meta.lastPassAt ?? null,
+      lastPass: meta.lastPass ?? null,
+      passes: meta.passes ?? 0,
+      passRunning: meta.passRunning ?? null,
+      lastIssueAt: meta.lastIssueAt ?? null,
+      lastIssue: meta.lastIssue ?? null,
+      issueRunning: meta.issueRunning ?? null,
+      lastDecision: meta.lastDecision ?? null,
+      counts: {
+        candidates: entries.filter((e) => e.state === "candidate").length,
+        strong: s ? entries.filter((e) => e.state === "candidate" && e.score >= s.strong).length : 0,
+        reserved: entries.filter((e) => e.state === "reserved").length,
+        sent: entries.filter((e) => e.state === "sent").length,
+        expired: entries.filter((e) => e.state === "expired").length,
+      },
+      entries: sorted.slice(0, 100),
+    };
+  }
+
   /** A digest was emailed from this conversation now (guards against a second send for the same run). */
   async markEmailed() {
     await (this as any).setState({ emailedAt: Date.now() });
@@ -276,6 +526,8 @@ export class AiDigest extends ManagedAgent {
       if (started && (state?.emailedAt ?? 0) >= started) return;
       const msgs = ((await (this as any).messages.all()) as { seq: number; role: string; content: string }[]).filter((m) => m.seq > before);
       const reply = [...msgs].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content ?? "";
+      // A scout pass: hand its candidates to the pool; never emailed.
+      if (state?.scoutRun) return await this.deliverScoutReply(reply, state.scoutRun);
       const digest = digestFromReply(reply);
       if (!digest) return; // not a digest (an answer, an error, a question): nothing to email
       const { subject, markdown } = digest;
@@ -284,6 +536,11 @@ export class AiDigest extends ManagedAgent {
       console.log(JSON.stringify({ digestEmail: "sending", runId, digest: profileId, definition: profile ? (profileId === GENERAL_ID ? "general" : "stored") : "defaults" }));
       const result = await sendDigestEmail(this.agentEnv, { subject, markdown, profileId, profile });
       if (result.ok) await this.markEmailed();
+      // An issue written from the pool: tell the pool which stories went out.
+      if (result.ok && state?.issueRun) {
+        const urls = [...markdown.matchAll(/\]\((https?:[^)\s]+)\)/g)].map((m) => m[1]!);
+        await poolActor(this.agentEnv, profileId).markSent({ slot: state.issueRun.slot, urls }).catch((err: unknown) => console.log(JSON.stringify({ pool: "markSent failed", error: String(err) })));
+      }
       console.log(JSON.stringify({ digestEmail: result.ok ? "sent" : "failed", runId, ...(result.ok ? { id: (result as any).id } : { error: (result as any).error }) }));
     } catch (err) {
       console.log(JSON.stringify({ digestEmail: "error", runId, error: err instanceof Error ? err.message : String(err) }));
@@ -446,7 +703,7 @@ export class AiDigest extends ManagedAgent {
 
   // ── the `digests` actor: digest definitions (called in-process by the router) ──
 
-  /** Every stored digest: id, title, window, items, schedule, when it changed. */
+  /** Every stored digest: id, title, window, items, scouting settings, when it changed. */
   async listDigests() {
     const state: any = await (this as any).getState();
     return Object.values(state?.profiles ?? {})
@@ -456,7 +713,7 @@ export class AiDigest extends ManagedAgent {
         try {
           p = parseProfile(d.id, d.markdown);
         } catch {}
-        return { id: d.id, title: p?.title ?? null, windowDays: p?.windowDays ?? null, items: p?.items ?? null, schedule: p?.schedule ?? null, updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 };
+        return { id: d.id, title: p?.title ?? null, windowDays: p?.windowDays ?? null, items: p?.items ?? null, scout: p?.scout ?? null, updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 };
       })
       .sort((a: any, b: any) => a.id.localeCompare(b.id));
   }
