@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-09
+
 ### Added
 
 - **Continuous scouting** ([spec 0010](docs/spec/0010-continuous-scouting.md), phase 1). A digest with `scout: 6h` (1h–24h) runs a short research pass at that interval and keeps what it finds in a candidate pool; an issue goes out when `send_at` stories score at least `strong` (and `min_gap` has passed), or at `max_gap` at the latest with whatever the pool holds (an empty pool sends a short "nothing new" note). Defaults: `send_at` = the lower bound of `items`, `strong: 7`, `min_gap: 2d`, `max_gap: 7d`.
