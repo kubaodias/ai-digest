@@ -19,18 +19,18 @@ export function scoutMessage(p: DigestProfile, opts: { since: string; until: str
     `SCOUT PASS. This is not a digest request: don't write a digest and don't call reader_preferences.`,
     ``,
     `Find new stories for the digest described below, published between ${opts.since.slice(0, 16).replace("T", " ")} and ${opts.until.slice(0, 16).replace("T", " ")} UTC.`,
-    `Budget: at most ${SCOUT_BUDGET} tool calls (web_search and fetch_page), a few at a time, then answer. Report at most ${MAX_PER_PASS} candidates, the most important first. Only stories you found with your tools in this pass; link the specific article, prefer primary sources (the maker's own post, release notes, the paper, the repository). Never invent links, dates or facts.`,
+    `Budget: at most ${SCOUT_BUDGET} tool calls in total (web_search and fetch_page together), a few at a time. Count them; when you reach ${SCOUT_BUDGET}, stop and answer with what you have, even if it's little. Report at most ${MAX_PER_PASS} candidates, the most important first. Only stories you found with your tools in this pass; link the specific article, prefer primary sources (the maker's own post, release notes, the paper, the repository). Never invent links, dates or facts.`,
     ``,
     `What the digest covers and who it's for:`,
     p.description,
     ``,
     known.length
-      ? `Already known (skip these unless you found a better primary source or another independent source covering them; then report it with "sameAs" set to its id):\n${known.map((k) => `- [${k.id}] ${k.headline}`).join("\n")}`
+      ? `Already known (don't report these as candidates; list the ids of any you come across again under "seen", with the URLs of sources covering them that you found; report a better primary source as a candidate with "sameAs" set to its id):\n${known.map((k) => `- [${k.id}] ${k.headline}`).join("\n")}`
       : `Nothing is known yet: this is the first pass.`,
     ``,
     `Answer with JSON only, no prose before or after:`,
     `${fence}json`,
-    `{"candidates": [{"headline": "…", "url": "https://…", "source": "example.com", "published": "YYYY-MM-DD", "summary": "one or two sentences", "importance": 1-10, "why": "why it matters for this digest's reader", "otherSources": ["https://…"], "primary": true, "sameAs": null}]}`,
+    `{"candidates": [{"headline": "…", "url": "https://…", "source": "example.com", "published": "YYYY-MM-DD", "summary": "one or two sentences", "importance": 1-10, "why": "why it matters for this digest's reader", "otherSources": ["https://…"], "primary": true, "sameAs": null}], "seen": [{"id": "…", "sources": ["https://…"]}]}`,
     fence,
     `importance: 9–10 only for major, field-changing news; 7–8 clearly worth the reader's time; 5–6 useful; 1–4 marginal. An empty list is a fine answer when nothing new fits.`,
   ].join("\n");

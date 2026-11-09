@@ -42,6 +42,12 @@ export interface PoolEntry {
   dropped?: string;
 }
 
+/** A known story a pass came across again, with any sources it hadn't been seen on. */
+export interface Sighting {
+  id: string;
+  sources: string[];
+}
+
 /** One candidate as a scout pass reports it, after validation and tagging. */
 export interface Candidate {
   headline: string;
@@ -127,13 +133,22 @@ export function entryId(canonical: string): string {
  * the window when given (else dropped), at most MAX_PER_PASS. Untagged: tags
  * and entities are added by the caller.
  */
-export function parseScoutReply(text: string, window: { since: string; until: string }): { candidates: Omit<Candidate, "tags" | "entities">[]; dropped: number } {
+export function parseScoutReply(text: string, window: { since: string; until: string }): { candidates: Omit<Candidate, "tags" | "entities">[]; dropped: number; seen: Sighting[] } {
   let raw: unknown[] = [];
+  let seenRaw: unknown[] = [];
   try {
     const json = text.match(/\{[\s\S]*\}/)?.[0] ?? "{}";
     const j = JSON.parse(json);
     raw = Array.isArray(j.candidates) ? j.candidates : [];
+    seenRaw = Array.isArray(j.seen) ? j.seen : [];
   } catch {}
+  const seen: Sighting[] = [];
+  for (const x of seenRaw.slice(0, 60)) {
+    const o = (typeof x === "string" ? { id: x } : (x ?? {})) as Record<string, unknown>;
+    if (typeof o.id !== "string" || !o.id) continue;
+    const urls = (Array.isArray(o.sources) ? o.sources : typeof o.url === "string" ? [o.url] : []).filter((u): u is string => typeof u === "string" && !!canonicalUrl(u)).slice(0, 5);
+    seen.push({ id: o.id, sources: urls });
+  }
   const out: Omit<Candidate, "tags" | "entities">[] = [];
   const since = window.since.slice(0, 10);
   const until = window.until.slice(0, 10);
@@ -161,7 +176,7 @@ export function parseScoutReply(text: string, window: { since: string; until: st
     });
     if (out.length >= MAX_PER_PASS) break;
   }
-  return { candidates: out, dropped: raw.length - out.length };
+  return { candidates: out, dropped: raw.length - out.length, seen };
 }
 
 function shiftDate(day: string, days: number): string {
@@ -196,12 +211,26 @@ export function sameStory(entry: Pick<PoolEntry, "headline" | "entities">, c: Pi
  * and takes the newer importance. Sent and expired entries absorb repeats
  * without coming back.
  */
-export function mergeCandidates(pool: PoolEntry[], candidates: Candidate[], now: string): { pool: PoolEntry[]; added: number; merged: number } {
+export function mergeCandidates(pool: PoolEntry[], candidates: Candidate[], now: string, seen: Sighting[] = []): { pool: PoolEntry[]; added: number; merged: number; resighted: number } {
   const next = pool.map((e) => ({ ...e, sources: [...e.sources] }));
   const byId = new Map(next.map((e) => [e.id, e]));
   let added = 0;
   let merged = 0;
+  let resighted = 0;
   const seenThisPass = new Set<string>();
+  // Known stories reported as seen again: a sighting, and any new sources (unknown ids are ignored).
+  for (const x of seen) {
+    const e = byId.get(x.id);
+    if (!e || seenThisPass.has(e.id)) continue;
+    e.sightings++;
+    e.lastSeen = now;
+    seenThisPass.add(e.id);
+    for (const u of x.sources) {
+      const domain = domainOf(u);
+      if (domain && !e.sources.some((s) => s.domain === domain)) e.sources.push({ domain, url: u });
+    }
+    resighted++;
+  }
   for (const c of candidates) {
     const canon = canonicalUrl(c.url)!;
     const id = entryId(canon);
@@ -252,7 +281,7 @@ export function mergeCandidates(pool: PoolEntry[], candidates: Candidate[], now:
     seenThisPass.add(id);
     added++;
   }
-  return { pool: next, added, merged };
+  return { pool: next, added, merged, resighted };
 }
 
 // ── scoring ──────────────────────────────────────────────────────────────────

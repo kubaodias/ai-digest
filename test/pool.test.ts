@@ -236,3 +236,18 @@ test("the quiet note: title with the range, no items", () => {
   assert.match(n.markdown, /Nothing new met the bar/);
   assert.doesNotMatch(n.markdown, /^## \d+\./m);
 });
+
+test("seen: known stories found again count as sightings, with new sources; unknown ids are ignored", () => {
+  const pool = mergeCandidates([], [cand()], ago(1)).pool;
+  const id = pool[0]!.id;
+  const text = JSON.stringify({ candidates: [], seen: [{ id, sources: ["https://news.example.org/acme", "bad"] }, "unknown-id", { nope: 1 }] });
+  const r = parseScoutReply(text, { since: ago(2), until: NOW });
+  assert.deepEqual(r.seen, [{ id, sources: ["https://news.example.org/acme"] }, { id: "unknown-id", sources: [] }]);
+  const m = mergeCandidates(pool, [], NOW, r.seen);
+  assert.equal(m.resighted, 1);
+  assert.equal(m.pool[0]!.sightings, 2);
+  assert.deepEqual(m.pool[0]!.sources.map((s) => s.domain).sort(), ["acme.example.com", "news.example.org"]);
+  const both = mergeCandidates(pool, [cand({ url: "https://acme.example.com/blog/harness-2?utm_source=x" })], NOW, [{ id, sources: [] }]);
+  assert.equal(both.pool[0]!.sightings, 2, "seen and re-reported in one pass: one sighting");
+  assert.match(scoutMessage(profile, { since: ago(1), until: NOW, known: [{ id: "abc", headline: "K" }] }), /under "seen"/);
+});

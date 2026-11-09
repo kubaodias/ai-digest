@@ -12,7 +12,7 @@ import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, p
 import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
   canonicalUrl, decide, housekeep, mergeCandidates, parseScoutReply, rescore, scoutSettings, slotOf,
-  type Candidate, type Decision, type PoolEntry,
+  type Candidate, type Decision, type PoolEntry, type Sighting,
 } from "./pool.ts";
 import { quietNote, scoutMessage, writerMessage } from "./scout-instructions.ts";
 import {
@@ -282,17 +282,17 @@ export class AiDigest extends ManagedAgent {
 
   /** A scout pass finished: validate and tag its candidates and hand them to the pool. */
   private async deliverScoutReply(reply: string, run: { digest: string; slot: string; since: string; until: string }) {
-    const { candidates, dropped } = parseScoutReply(reply, run);
+    const { candidates, dropped, seen } = parseScoutReply(reply, run);
     const tags = await tagItems(this.agentEnv.TELNYX as any, candidates.map((c) => ({ headline: c.headline, why: c.summary || c.why })));
     const tagged: Candidate[] = candidates.map((c, k) => ({ ...c, tags: tags[k]?.tags ?? [], entities: tags[k]?.entities ?? [] }));
-    console.log(JSON.stringify({ scout: "pass done", digest: run.digest, slot: run.slot, candidates: tagged.length, dropped }));
+    console.log(JSON.stringify({ scout: "pass done", digest: run.digest, slot: run.slot, candidates: tagged.length, seen: seen.length, dropped }));
     // Delivered by a durable task: retried with backoff until the pool takes it (a hung or failed call can't lose a pass).
-    await (this as any).schedule(0, "deliverToPool", { digest: run.digest, slot: run.slot, candidates: tagged, dropped }, { id: "deliver", maxRetries: 8 });
+    await (this as any).schedule(0, "deliverToPool", { digest: run.digest, slot: run.slot, candidates: tagged, seen, dropped }, { id: "deliver", maxRetries: 8 });
   }
 
   /** Scheduled by deliverScoutReply; throws on failure so the task is retried. addCandidates ignores a repeat. */
-  async deliverToPool(p: { digest: string; slot: string; candidates: Candidate[]; dropped: number }) {
-    await poolActor(this.agentEnv, p.digest).addCandidates({ slot: p.slot, candidates: p.candidates, dropped: p.dropped });
+  async deliverToPool(p: { digest: string; slot: string; candidates: Candidate[]; seen?: Sighting[]; dropped: number }) {
+    await poolActor(this.agentEnv, p.digest).addCandidates({ slot: p.slot, candidates: p.candidates, seen: p.seen ?? [], dropped: p.dropped });
     console.log(JSON.stringify({ scout: "delivered", digest: p.digest, slot: p.slot }));
   }
 
@@ -391,16 +391,16 @@ export class AiDigest extends ManagedAgent {
   }
 
   /** A scout pass's candidates (from its conversation's post-run hook): merge, score, decide. */
-  async addCandidates(p: { slot: string; candidates: Candidate[]; dropped: number }) {
+  async addCandidates(p: { slot: string; candidates: Candidate[]; seen?: Sighting[]; dropped: number }) {
     const id = this.poolDigest();
     const { entries, meta } = await this.poolState();
     if (meta.lastPassSlot === p.slot) return { duplicate: true }; // at-least-once delivery
     const profile = await loadProfile(this.agentEnv, id);
     const run = meta.passRunning?.slot === p.slot ? meta.passRunning : undefined;
     const now = new Date().toISOString();
-    const merged = mergeCandidates(entries, p.candidates, now);
+    const merged = mergeCandidates(entries, p.candidates, now, p.seen ?? []);
     const pool = await this.refreshed(id, merged.pool, profile, now);
-    const pass = { slot: p.slot, at: now, since: run?.since, until: run?.until, added: merged.added, merged: merged.merged, dropped: p.dropped };
+    const pass = { slot: p.slot, at: now, since: run?.since, until: run?.until, added: merged.added, merged: merged.merged, resighted: merged.resighted, dropped: p.dropped };
     const decision = profile && run?.decide !== false ? this.decision(pool, profile, meta, now, !!run?.force) : undefined;
     await this.savePool(entries, pool, {
       // A replayed pass (an `until` in the past) never moves the clock back.
