@@ -98,7 +98,7 @@ test("runs: start one for a stored digest in its own conversation, with the defi
   assert.equal(body.conversation, "agent-memory--w45");
   const receive = calls.find((c) => c.method === "receive")!;
   assert.equal(receive.actor, "agent-memory--w45");
-  assert.match(String(receive.args[0]), /Agent Memory Weekly/);
+  assert.match(String(receive.args[0]), /Agent Memory — /);
   assert.match(String(receive.args[0]), /For this issue in particular: focus on MCP/);
   const status = await route(req("/v1/runs/agent-memory--w45", { headers: h }), env);
   assert.deepEqual((await status.json()).runs, [{ runId: "run-1", status: "completed", durationMs: 260233, toolCalls: 26 }], "runs as a list (the actor returns { runs })");
