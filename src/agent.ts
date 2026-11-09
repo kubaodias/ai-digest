@@ -286,7 +286,14 @@ export class AiDigest extends ManagedAgent {
     const tags = await tagItems(this.agentEnv.TELNYX as any, candidates.map((c) => ({ headline: c.headline, why: c.summary || c.why })));
     const tagged: Candidate[] = candidates.map((c, k) => ({ ...c, tags: tags[k]?.tags ?? [], entities: tags[k]?.entities ?? [] }));
     console.log(JSON.stringify({ scout: "pass done", digest: run.digest, slot: run.slot, candidates: tagged.length, dropped }));
-    await poolActor(this.agentEnv, run.digest).addCandidates({ slot: run.slot, candidates: tagged, dropped });
+    // Delivered by a durable task: retried with backoff until the pool takes it (a hung or failed call can't lose a pass).
+    await (this as any).schedule(0, "deliverToPool", { digest: run.digest, slot: run.slot, candidates: tagged, dropped }, { id: "deliver", maxRetries: 8 });
+  }
+
+  /** Scheduled by deliverScoutReply; throws on failure so the task is retried. addCandidates ignores a repeat. */
+  async deliverToPool(p: { digest: string; slot: string; candidates: Candidate[]; dropped: number }) {
+    await poolActor(this.agentEnv, p.digest).addCandidates({ slot: p.slot, candidates: p.candidates, dropped: p.dropped });
+    console.log(JSON.stringify({ scout: "delivered", digest: p.digest, slot: p.slot }));
   }
 
   // ── continuous scouting: the pool actor, "<digest>--pool" ──
