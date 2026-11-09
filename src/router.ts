@@ -185,7 +185,8 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
         }
         if (method === "DELETE") {
           const deleted = await actor(DIGESTS_ACTOR).deleteDigest(id);
-          await attempt(() => actor(poolOf(id)).poolConfigure()).catch(() => undefined);
+          // Its timer stops and its pool is emptied, so a digest created later under the same name starts fresh.
+          await attempt(() => actor(poolOf(id)).poolDelete()).catch(() => undefined);
           return json(200, deleted);
         }
       }

@@ -27,6 +27,7 @@ function fakeEnv(key: string | undefined = KEY) {
           receive: async (text: string) => (rec("receive", [text]), { runId: "run-1" }),
           prepareGeneralRun: async (run: unknown) => (rec("prepareGeneralRun", [run]), { ok: true }),
           poolConfigure: async () => (rec("poolConfigure", []), { scouting: true }),
+          poolDelete: async () => (rec("poolDelete", []), { scouting: false, cleared: 0 }),
           startPass: async (o: unknown) => (rec("startPass", [o]), { ok: true, conversation: `${name.replace(/--pool$/, "")}--scout-x` }),
           writeNow: async (o: unknown) => (rec("writeNow", [o]), { ok: true, conversation: `${name.replace(/--pool$/, "")}--issue-x` }),
           poolView: async () => (rec("poolView", []), { digest: name, counts: { candidates: 2 } }),
@@ -257,14 +258,15 @@ test("topicSlug: a short run-name prefix", () => {
 
 const scouting = `---\ntitle: "Harness Watch — {range}"\nitems: 3-6\nscout: 6h\n---\nAgent harnesses, for engineers building agents.\n`;
 
-test("storing or deleting a definition arms or cancels its scout timer", async () => {
+test("storing a definition arms its scout timer; deleting it stops the timer and empties the pool", async () => {
   const { env, calls } = fakeEnv();
   const h = await auth();
   const r = await route(req("/v1/digests/harness-watch", { method: "PUT", headers: h, body: scouting }), env);
   assert.equal(r.status, 200);
   assert.deepEqual((await r.json()).scouting, { scouting: true });
   await route(req("/v1/digests/harness-watch", { method: "DELETE", headers: h }), env);
-  assert.deepEqual(calls.filter((c) => c.method === "poolConfigure").map((c) => c.actor), ["harness-watch--pool", "harness-watch--pool"]);
+  assert.deepEqual(calls.filter((c) => c.method === "poolConfigure").map((c) => c.actor), ["harness-watch--pool"]);
+  assert.deepEqual(calls.filter((c) => c.method === "poolDelete").map((c) => c.actor), ["harness-watch--pool"]);
 });
 
 test("scout and pool routes: a pass now (with a replay window), the pool, only for scouting digests", async () => {

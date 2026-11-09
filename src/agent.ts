@@ -373,6 +373,17 @@ export class AiDigest extends ManagedAgent {
     return { digest: id, scouting: true, everyHours: s.scoutHours, firstPassInMin: Math.round(delay / 60) };
   }
 
+  /** The digest was deleted: stop its timer and forget its pool (a new digest with the same name starts empty). */
+  async poolDelete() {
+    const id = this.poolDigest();
+    const tasks: any[] = await (this as any).listSchedules().catch(() => []);
+    for (const t of [...tasks.map((t) => t.id), "scout", "scout-first"]) await (this as any).cancelSchedule(t).catch(() => false);
+    const { entries } = await this.poolState();
+    await (this as any).setState({ poolEntries: null, poolMeta: null });
+    console.log(JSON.stringify({ pool: "deleted", digest: id, entries: entries.length }));
+    return { digest: id, scouting: false, cleared: entries.length };
+  }
+
   /** The timer's tick: one scout pass (unless one is still running), then the next tick, an interval later. */
   async scoutTick() {
     await this.startPass({}).catch((err: unknown) => console.log(JSON.stringify({ scout: "tick failed", error: err instanceof Error ? err.message : String(err) })));
