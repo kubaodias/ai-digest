@@ -1,20 +1,20 @@
-// The requests for continuous scouting (docs/spec/0010-continuous-scouting.md):
-// a scout pass (find new candidates, answer JSON) and an issue written from
+// The requests for watching (docs/spec/0010-continuous-scouting.md):
+// a check (find new candidates, answer JSON) and an issue written from
 // the pool (no new search). Kept apart from agent.ts so the class file has no
 // long template strings. Pure; covered by test/pool.test.ts.
 
 import type { DigestProfile } from "./profile.ts";
 import type { PoolEntry } from "./pool.ts";
-import { KNOWN_IN_REQUEST, MAX_PER_ENTITY, MAX_PER_PASS, trending } from "./pool.ts";
+import { KNOWN_IN_REQUEST, MAX_PER_ENTITY, MAX_PER_CHECK, trending } from "./pool.ts";
 
-/** Tool calls a scout pass may make. */
-export const SCOUT_BUDGET = 8;
+/** Tool calls a check may make. */
+export const CHECK_BUDGET = 8;
 /** Links an issue's writer may check with fetch_page. */
 export const WRITER_CHECKS = 3;
 /** Sources listed per item. */
 export const SOURCES_PER_ITEM = 3;
 
-/** What a run may spend on the web tools, by its conversation: scout passes and issues written from the pool. */
+/** What a run may spend on the web tools, by its conversation: checks and issues written from the pool. */
 export interface ToolBudget {
   /** web_search and research calls. */
   search: number;
@@ -26,7 +26,7 @@ export interface ToolBudget {
 }
 
 export function toolBudget(conversation: string): ToolBudget | undefined {
-  if (/--scout-[a-z0-9-]+$/.test(conversation)) return { search: SCOUT_BUDGET, fetch: SCOUT_BUDGET, total: SCOUT_BUDGET, what: "this scout pass" };
+  if (/--check-[a-z0-9-]+$/.test(conversation)) return { search: CHECK_BUDGET, fetch: CHECK_BUDGET, total: CHECK_BUDGET, what: "this check" };
   if (/--issue-[a-z0-9-]+$/.test(conversation)) return { search: 0, fetch: WRITER_CHECKS, total: WRITER_CHECKS, what: "writing this issue" };
   return undefined;
 }
@@ -66,14 +66,14 @@ export function storiesRange(entries: Pick<PoolEntry, "published" | "firstSeen">
 
 const fence = "```";
 
-/** The request for one scout pass. */
-export function scoutMessage(p: DigestProfile, opts: { since: string; until: string; known: Pick<PoolEntry, "id" | "headline">[] }): string {
+/** The request for one check. */
+export function checkMessage(p: DigestProfile, opts: { since: string; until: string; known: Pick<PoolEntry, "id" | "headline">[] }): string {
   const known = opts.known.slice(0, KNOWN_IN_REQUEST);
   return [
-    `SCOUT PASS. This is not a digest request: don't write a digest and don't call reader_preferences.`,
+    `WATCH CHECK. This is not a digest request: don't write a digest and don't call reader_preferences.`,
     ``,
     `Find new stories for the digest described below, published between ${opts.since.slice(0, 16).replace("T", " ")} and ${opts.until.slice(0, 16).replace("T", " ")} UTC.`,
-    `Budget: at most ${SCOUT_BUDGET} tool calls in total (web_search and fetch_page together), a few at a time. Count them; when you reach ${SCOUT_BUDGET}, stop and answer with what you have, even if it's little. Report at most ${MAX_PER_PASS} candidates, the most important first. Only stories you found with your tools in this pass; link the specific article, prefer primary sources (the maker's own post, release notes, the paper, the repository). Never invent links, dates or facts.`,
+    `Budget: at most ${CHECK_BUDGET} tool calls in total (web_search and fetch_page together), a few at a time. Count them; when you reach ${CHECK_BUDGET}, stop and answer with what you have, even if it's little. Report at most ${MAX_PER_CHECK} candidates, the most important first. Only stories you found with your tools in this check; link the specific article, prefer primary sources (the maker's own post, release notes, the paper, the repository). Never invent links, dates or facts.`,
     `Look broadly: news sites and blogs, Hacker News, Reddit and other communities, research, as well as the makers' own announcements. Spend at most 2 tool calls on release notes or changelog pages, and report at most ${MAX_PER_ENTITY} candidates about the same product or company.`,
     `When other outlets cover the same story, list their article URLs (up to 4) in "otherSources": that's how stories everyone is talking about are recognised. Count articles that report on the story and discussion threads (Hacker News, Reddit); not link roundups, newsletters or lists that only collect links. Set "url" to the maker's own page when you found it (the post, changelog, paper, repository), not a third-party write-up of it.`,
     ``,
@@ -82,7 +82,7 @@ export function scoutMessage(p: DigestProfile, opts: { since: string; until: str
     ``,
     known.length
       ? `Already known (don't report these as candidates; list the ids of any you come across again under "seen", with the URLs of sources covering them that you found; report a better primary source as a candidate with "sameAs" set to its id):\n${known.map((k) => `- [${k.id}] ${k.headline}`).join("\n")}`
-      : `Nothing is known yet: this is the first pass.`,
+      : `Nothing is known yet: this is the first check.`,
     ``,
     `Answer with JSON only, no prose before or after:`,
     `${fence}json`,

@@ -2,6 +2,8 @@
 
 Status: **accepted**: phase 1 shipped in 0.5.0; phases 2 (breaking alerts) and 3 (rising subjects) are proposed.
 
+> **Renamed in 0.5.1:** the feature is called **watching**. The setting is `watch:` (`scout:` still works), a pass is a **check** (`<digest>--check-<time>`, `POST /v1/digests/<id>/check`, `npm run digests -- watch <id>`). This record keeps the names it was written with.
+
 ## Summary
 
 Today a digest is one big research run, started by hand (`npm run digests -- run`) or by an external cron, that writes and emails an issue in one go. This spec replaces the fixed schedule with a **scout loop**: each digest looks for new stories at a fixed interval (e.g. every 6 hours) with a small research pass, keeps what it finds in a **candidate pool**, and sends an issue when the pool has enough strong stories, or when the longest gap between issues is reached, whatever the pool holds. A confirmed, very important story can go out right away as a one-item **breaking alert**. Because the pool sees the same subjects across many passes, it can also tell which areas are **rising**.

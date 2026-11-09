@@ -27,8 +27,8 @@ export interface DigestProfile {
   images: boolean;
   /** Recipients overriding DIGEST_EMAIL_TO. */
   to: string[];
-  /** Continuous scouting (docs/spec/0010-continuous-scouting.md): set when the file has `scout:`. */
-  scout?: { scoutHours: number; sendAt: number; strong: number; minGapDays: number; maxGapDays: number };
+  /** Watching (docs/spec/0010-continuous-scouting.md): set when the file has `watch:` (or the old name, `scout:`). */
+  watch?: { watchHours: number; sendAt: number; strong: number; minGapDays: number; maxGapDays: number };
   /** What to cover, for whom, sources, what to leave out: given to the research model as written. */
   description: string;
   /** For the built-in General digest: the topic this run is about. */
@@ -55,8 +55,8 @@ export function isDigestId(id: string | undefined): id is string {
 /** The longest topic `ask` accepts, after cleaning. */
 export const TOPIC_MAX = 200;
 
-const KNOWN = new Set(["title", "window", "items", "closing", "images", "to", "scout", "send_at", "strong", "min_gap", "max_gap"]);
-const SCOUT_ONLY = ["send_at", "strong", "min_gap", "max_gap"];
+const KNOWN = new Set(["title", "window", "items", "closing", "images", "to", "watch", "scout", "send_at", "strong", "min_gap", "max_gap"]);
+const WATCH_ONLY = ["send_at", "strong", "min_gap", "max_gap"];
 
 export class ProfileError extends Error {
   readonly id: string;
@@ -78,20 +78,23 @@ function intIn(id: string, key: string, v: string, min: number, max: number, uni
   return n;
 }
 
-/** The scouting settings, or undefined without `scout:`. The others need it. */
-function parseScout(id: string, s: Record<string, string>, items: { min: number; max: number }): DigestProfile["scout"] {
-  if (s.scout === undefined || /^(off|no|none)$/i.test(s.scout)) {
-    const stray = SCOUT_ONLY.find((k) => s[k] !== undefined);
-    if (stray) throw new ProfileError(id, `"${stray}" needs "scout" (e.g. scout: 6h)`);
+/** The watching settings, or undefined without `watch:` (`scout:` is its old name). The others need it. */
+function parseWatch(id: string, s: Record<string, string>, items: { min: number; max: number }): DigestProfile["watch"] {
+  if (s.watch !== undefined && s.scout !== undefined) throw new ProfileError(id, `"scout" is the old name of "watch": keep only "watch"`);
+  const key = s.watch !== undefined ? "watch" : "scout";
+  const every = s[key];
+  if (every === undefined || /^(off|no|none)$/i.test(every)) {
+    const stray = WATCH_ONLY.find((k) => s[k] !== undefined);
+    if (stray) throw new ProfileError(id, `"${stray}" needs "watch" (e.g. watch: 6h)`);
     return undefined;
   }
-  const scoutHours = intIn(id, "scout", s.scout, 1, 24, "h");
+  const watchHours = intIn(id, key, every, 1, 24, "h");
   const sendAt = s.send_at !== undefined ? intIn(id, "send_at", s.send_at, 1, 30) : items.min;
   const strong = s.strong !== undefined ? intIn(id, "strong", s.strong, 1, 10) : 7;
   const minGapDays = s.min_gap !== undefined ? intIn(id, "min_gap", s.min_gap, 0, 30, "d") : 2;
   const maxGapDays = s.max_gap !== undefined ? intIn(id, "max_gap", s.max_gap, 1, 30, "d") : 7;
   if (maxGapDays < minGapDays) throw new ProfileError(id, `"max_gap" must be at least "min_gap"`);
-  return { scoutHours, sendAt, strong, minGapDays, maxGapDays };
+  return { watchHours, sendAt, strong, minGapDays, maxGapDays };
 }
 
 /** "14d" → 14 (1–90 days). */
@@ -125,7 +128,7 @@ function parseDefinition(id: string, markdown: string): DigestProfile {
     if (!raw.trim() || raw.trim().startsWith("#")) return;
     const kv = raw.match(/^([a-z_]+)\s*:\s*(.*)$/);
     if (!kv) throw new ProfileError(id, `settings line ${n + 1} isn't "key: value": ${line.trim()}`);
-    if (kv[1] === "schedule") throw new ProfileError(id, `"schedule" was replaced by "scout" (e.g. scout: 6h; see docs/spec/0010-continuous-scouting.md)`);
+    if (kv[1] === "schedule") throw new ProfileError(id, `"schedule" was replaced by "watch" (e.g. watch: 6h; see docs/SETUP.md)`);
     if (!KNOWN.has(kv[1]!)) throw new ProfileError(id, `unknown setting "${kv[1]}" (known: ${[...KNOWN].join(", ")})`);
     settings[kv[1]!] = unquote(kv[2]!);
   });
@@ -145,8 +148,8 @@ function parseDefinition(id: string, markdown: string): DigestProfile {
   const to = (settings.to ?? "").split(/[,;\s]+/).filter(Boolean);
   const bad = to.find((a) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a));
   if (bad) throw new ProfileError(id, `"to" has an invalid address: ${bad}`);
-  const scout = parseScout(id, settings, items);
-  return { id, title: settings.title, windowDays, items, closing, images, to, ...(scout ? { scout } : {}), description };
+  const watch = parseWatch(id, settings, items);
+  return { id, title: settings.title, windowDays, items, closing, images, to, ...(watch ? { watch } : {}), description };
 }
 
 /** The conversation name for a run of a digest: "<id>--<run>". */

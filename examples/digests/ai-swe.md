@@ -4,7 +4,7 @@ window: 7d
 items: 5-15
 closing: Themes this week
 # to: you@example.com          # optional: overrides DIGEST_EMAIL_TO
-# scout: 6h                    # look for new stories every 6 hours and send when enough strong ones gather
+# watch: 6h                    # check for new stories every 6 hours and send when enough strong ones gather
 ---
 The hottest news in AI and software engineering from the past week, for a software engineer.
 

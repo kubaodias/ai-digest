@@ -5,12 +5,12 @@
 //   pull [id…]                   download definitions into digests/
 //   show <id>                    print a stored definition
 //   delete <id>                  delete a stored definition (sent issues, votes and memory stay)
-//   run <id> [focus…] [--run N] [--no-scout]
+//   run <id> [focus…] [--run N] [--from-pool]
 //                                start a digest now; [focus] adds one-off guidance for this issue.
-//                                A scouting digest runs a pass, then writes from its pool (--no-scout: from the pool now)
-//   scout <id> [--since T] [--until T] [--no-send]
-//                                a scout pass now; --since/--until replay a past window; --no-send only fills the pool
-//   pool <id>                    a scouting digest's pool: timing, counts, the last decision, the candidates
+//                                A watching digest runs a check, then writes from its pool (--from-pool: from the pool now)
+//   watch <id> [--since T] [--until T] [--no-send]
+//                                a watching digest's check now; --since/--until replay a past window; --no-send only fills the pool
+//   pool <id>                    a watching digest's pool: timing, counts, the last decision, the candidates
 //   ask <topic…> [--window 14d] [--items 5-8] [--run N]
 //                                a one-off General digest on any topic, emailed to DIGEST_EMAIL_TO
 //   status <conversation>        a run's recent steps
@@ -54,7 +54,7 @@ async function main() {
           continue;
         }
         const items = d.items ? `${d.items.min}-${d.items.max} items` : "";
-        console.log(`${d.id.padEnd(22)} ${(d.title ?? "(invalid)").padEnd(48)} ${String(d.windowDays ?? "?").padStart(2)}d  ${items.padEnd(11)} ${d.scout ? `scouts every ${d.scout.scoutHours}h` : ""}`);
+        console.log(`${d.id.padEnd(22)} ${(d.title ?? "(invalid)").padEnd(48)} ${String(d.windowDays ?? "?").padStart(2)}d  ${items.padEnd(11)} ${d.watch ? `checks every ${d.watch.watchHours}h` : ""}`);
       }
       return;
     }
@@ -97,12 +97,12 @@ async function main() {
     }
     case "run": {
       const runName = flag("--run");
-      const noScout = has("--no-scout");
+      const fromPool = has("--from-pool") || has("--no-scout"); // --no-scout: the 0.5.0 name
       const [id, ...focus] = rest;
-      if (!id) fail("Usage: npm run digests -- run <id> [focus for this issue] [--run <name>] [--no-scout]");
-      const r = await agentApi(env, "POST", `/v1/digests/${id}/runs`, { ...(runName ? { run: runName } : {}), ...(focus.length ? { message: focus.join(" ") } : {}), ...(noScout ? { scout: false } : {}) });
+      if (!id) fail("Usage: npm run digests -- run <id> [focus for this issue] [--run <name>] [--from-pool]");
+      const r = await agentApi(env, "POST", `/v1/digests/${id}/runs`, { ...(runName ? { run: runName } : {}), ...(focus.length ? { message: focus.join(" ") } : {}), ...(fromPool ? { check: false } : {}) });
       if (r.ok === false) fail(r.error);
-      if (r.mode === "scout-then-write") console.log(`Started a scout pass for ${r.digest} (${r.conversation}); an issue is written from the pool when it's done.`);
+      if (r.mode === "check-then-write") console.log(`Started a check for ${r.digest} (${r.conversation}); an issue is written from the pool when it's done.`);
       else if (r.mode === "from-pool") console.log(`Writing ${r.digest} from its pool now; follow it with: npm run digests -- pool ${r.digest}`);
       else console.log(`Started ${r.digest} in conversation ${r.conversation}. It takes 3–5 minutes; the email is sent when it's done.`);
       if (r.conversation) console.log(`Follow it: npm run digests -- status ${r.conversation}`);
@@ -119,15 +119,17 @@ async function main() {
       console.log(`Follow it: npm run digests -- status ${r.conversation}`);
       return;
     }
-    case "scout": {
+    case "watch":
+    case "check":
+    case "scout": { // check and scout: other names (scout was 0.5.0's)
       const since = flag("--since");
       const until = flag("--until");
       const noSend = has("--no-send");
       const id = rest[0];
-      if (!id) fail("Usage: npm run digests -- scout <id> [--since 2026-11-02] [--until 2026-11-04] [--no-send]");
-      const r = await agentApi(env, "POST", `/v1/digests/${id}/scout`, { ...(since ? { since } : {}), ...(until ? { until } : {}), ...(noSend ? { decide: false } : {}) }).catch((e: Error) => fail(e.message));
+      if (!id) fail("Usage: npm run digests -- watch <id> [--since 2026-11-02] [--until 2026-11-04] [--no-send]");
+      const r = await agentApi(env, "POST", `/v1/digests/${id}/check`, { ...(since ? { since } : {}), ...(until ? { until } : {}), ...(noSend ? { decide: false } : {}) }).catch((e: Error) => fail(e.message));
       if (r.ok === false) fail(`${r.error}${r.conversation ? ` (${r.conversation})` : ""}`);
-      console.log(`Scout pass started in ${r.conversation}, ${r.since.slice(0, 16)} → ${r.until.slice(0, 16)} UTC.${noSend ? " It only fills the pool." : ""}`);
+      console.log(`Check started in ${r.conversation}, ${r.since.slice(0, 16)} → ${r.until.slice(0, 16)} UTC.${noSend ? " It only fills the pool." : ""}`);
       console.log(`Then: npm run digests -- pool ${id}`);
       return;
     }
@@ -136,8 +138,8 @@ async function main() {
       if (!id) fail("Usage: npm run digests -- pool <id>");
       const v = await agentApi(env, "GET", `/v1/digests/${id}/pool`);
       const t = (iso: string | null) => (iso ? iso.slice(0, 16).replace("T", " ") + " UTC" : "—");
-      if (!v.scout) console.log(`${id} doesn't scout (no "scout:" in its definition).`);
-      console.log(`passes ${v.passes} · last ${t(v.lastPassAt)}${v.passRunning ? " (one running)" : ""} · next ${t(v.nextPassAt)} · last issue ${t(v.lastIssueAt)}${v.issueRunning ? " (one being written)" : ""}`);
+      if (!v.watch) console.log(`${id} doesn't watch (no "watch:" in its definition).`);
+      console.log(`checks ${v.checks} · last ${t(v.lastCheckAt)}${v.checkRunning ? " (one running)" : ""} · next ${t(v.nextCheckAt)} · last issue ${t(v.lastIssueAt)}${v.issueRunning ? " (one being written)" : ""}`);
       console.log(`pool: ${v.counts.strong} strong · ${v.counts.candidates} candidates · ${v.counts.reserved} reserved · ${v.counts.sent} sent · ${v.counts.expired} expired`);
       if (v.lastDecision) console.log(`decision: ${v.lastDecision.action} — ${v.lastDecision.reason}${v.lastDecision.dueBy ? ` (an issue by ${t(v.lastDecision.dueBy)} at the latest)` : ""}`);
       for (const e of v.entries) {

@@ -9,9 +9,9 @@
 //   GET    /v1/digests/<id>               operator token   one definition (Markdown)
 //   PUT    /v1/digests/<id>               operator token   store a definition (body: Markdown)
 //   DELETE /v1/digests/<id>               operator token   delete a definition
-//   POST   /v1/digests/<id>/runs          operator token   start a run: {"message"?, "run"?, "scout"?}
-//   GET    /v1/digests/<id>/pool          operator token   a scouting digest's pool and its last decision
-//   POST   /v1/digests/<id>/scout         operator token   a scout pass now: {"since"?, "until"?, "decide"?}
+//   POST   /v1/digests/<id>/runs          operator token   start a run: {"message"?, "run"?, "check"?}
+//   GET    /v1/digests/<id>/pool          operator token   a watching digest's pool and its last decision
+//   POST   /v1/digests/<id>/check         operator token   a check now: {"since"?, "until"?, "decide"?} (0.5.0: /scout)
 //   POST   /v1/runs                       operator token   a one-off General digest: {"topic", "window"?, "items"?, "run"?}
 //   GET    /v1/runs/<conversation>        operator token   the conversation's recent runs
 //
@@ -94,7 +94,7 @@ export function topicSlug(topic: string): string {
   return topic.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24).replace(/-+$/, "");
 }
 
-/** A digest's pool actor (continuous scouting; agent.ts). */
+/** A digest's pool actor (watching; agent.ts). */
 const poolOf = (id: string) => `${id}--pool`;
 /** Call an actor method, turning a synchronous throw (e.g. a missing method) into a rejection. */
 const attempt = <T>(f: () => Promise<T>) => Promise.resolve().then(f);
@@ -110,7 +110,7 @@ function isoParam(v: unknown, name: string): string | undefined {
 /** How the built-in General digest appears in GET /v1/digests. */
 function generalSummary() {
   const p = generalProfile("{topic}");
-  return { id: GENERAL_ID, builtIn: true, title: p.title, windowDays: p.windowDays, items: p.items, scout: null, updatedAt: null, versions: null };
+  return { id: GENERAL_ID, builtIn: true, title: p.title, windowDays: p.windowDays, items: p.items, watch: null, scout: null, updatedAt: null, versions: null };
 }
 
 /**
@@ -179,9 +179,9 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
             throw err;
           }
           const stored = await actor(DIGESTS_ACTOR).putDigest(id, markdown);
-          // Arm, re-arm or cancel the scout timer (every deploy pushes every definition, so this also repairs a lost timer).
-          const scouting = await attempt(() => actor(poolOf(id)).poolConfigure()).catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
-          return json(200, { ...stored, scouting });
+          // Arm, re-arm or cancel the watch timer (every deploy pushes every definition, so this also repairs a lost timer).
+          const watching = await attempt(() => actor(poolOf(id)).poolConfigure()).catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
+          return json(200, { ...stored, watching, scouting: watching /* the 0.5.0 name */ });
         }
         if (method === "DELETE") {
           const deleted = await actor(DIGESTS_ACTOR).deleteDigest(id);
@@ -195,10 +195,11 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
         if (!d) return json(404, { error: "not_found", message: `no digest "${id}"` });
         return json(200, await actor(poolOf(id)).poolView());
       }
-      if (id && parts[2] === "scout" && parts.length === 3 && method === "POST") {
+      // "/scout" is the 0.5.0 name of "/check".
+      if (id && (parts[2] === "check" || parts[2] === "scout") && parts.length === 3 && method === "POST") {
         const d = await actor(DIGESTS_ACTOR).getDigest(id);
         if (!d) return json(404, { error: "not_found", message: `no digest "${id}"` });
-        if (!parseProfile(id, d.markdown).scout) return json(400, { error: "not_scouting", message: `"${id}" doesn't scout: add "scout: 6h" to its definition and push it` });
+        if (!parseProfile(id, d.markdown).watch) return json(400, { error: "not_watching", message: `"${id}" doesn't watch: add "watch: 6h" to its definition and push it` });
         const body = await req.json().catch(() => ({}));
         let since: string | undefined, until: string | undefined;
         try {
@@ -208,18 +209,19 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
           return json(400, { error: "bad_request", message: (err as Error).message.replace(/^request: /, "") });
         }
         if (since && until && since >= until) return json(400, { error: "bad_request", message: `"since" must be before "until"` });
-        const r = await actor(poolOf(id)).startPass({ since, until, decide: body?.decide !== false });
+        const r = await actor(poolOf(id)).startCheck({ since, until, decide: body?.decide !== false });
         return json(r.ok ? 202 : 409, { digest: id, ...r });
       }
       if (id && parts[2] === "runs" && parts.length === 3 && method === "POST") {
         const d = await actor(DIGESTS_ACTOR).getDigest(id);
         if (!d) return json(404, { error: "not_found", message: `no digest "${id}": push it first (npm run digests -- push)` });
         const body = await req.json().catch(() => ({}));
-        // A scouting digest writes from its pool: after a fresh pass (default), or right away with "scout": false.
-        if (parseProfile(id, d.markdown).scout) {
+        // A watching digest writes from its pool: after a fresh check (default), or right away with "check": false ("scout": false in 0.5.0).
+        if (parseProfile(id, d.markdown).watch) {
           const focus = typeof body?.message === "string" ? body.message : undefined;
-          const r = body?.scout === false ? await actor(poolOf(id)).writeNow({ focus }) : await actor(poolOf(id)).startPass({ force: { focus } });
-          return json(r.ok ? 202 : 409, { digest: id, mode: body?.scout === false ? "from-pool" : "scout-then-write", ...r });
+          const fromPool = body?.check === false || body?.scout === false;
+          const r = fromPool ? await actor(poolOf(id)).writeNow({ focus }) : await actor(poolOf(id)).startCheck({ force: { focus } });
+          return json(r.ok ? 202 : 409, { digest: id, mode: fromPool ? "from-pool" : "check-then-write", ...r });
         }
         const conversation = runConversation(id, runName(body?.run));
         const message = runMessage(parseProfile(id, d.markdown), typeof body?.message === "string" ? body.message : undefined);

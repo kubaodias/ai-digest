@@ -27,7 +27,7 @@ test("only title and description are required; the rest defaults", () => {
   assert.deepEqual(p.items, DEFAULTS.items);
   assert.equal(p.closing, DEFAULTS.closing);
   assert.equal(p.images, true);
-  assert.equal(p.scout, undefined, "no scouting unless asked");
+  assert.equal(p.watch, undefined, "no watching unless asked");
 });
 
 test("settings: quotes, comments, closing none, images off, recipients", () => {
@@ -58,7 +58,7 @@ test("mistakes are named precisely", () => {
   assert.match(err("x", file("title: x\nitems: 10-5")), /"items"/);
   assert.match(err("x", file("title: x\nto: not-an-email")), /invalid address/);
   assert.match(err("x", file("title: x\ncolour: blue")), /unknown setting "colour"/);
-  assert.match(err("x", file("title: x\nschedule: whenever")), /"schedule" was replaced by "scout"/);
+  assert.match(err("x", file("title: x\nschedule: whenever")), /"schedule" was replaced by "watch"/);
 });
 
 test("conversation names carry the digest", () => {
@@ -128,7 +128,7 @@ test("the General digest: topics are cleaned to one line and limited", () => {
   assert.match(runMessage(p), /information about agents to: someone@example\.com images: off:/);
 });
 
-test("scouting settings: defaults, ranges, and they need scout", () => {
+test("watching settings: defaults, ranges, and they need watch", () => {
   const err = (id: string, md: string) => {
     try {
       parseProfile(id, md);
@@ -137,14 +137,18 @@ test("scouting settings: defaults, ranges, and they need scout", () => {
     }
     return assert.fail("expected an error");
   };
-  const d = parseProfile("x", file("title: x\nitems: 4-9\nscout: 6h"));
-  assert.deepEqual(d.scout, { scoutHours: 6, sendAt: 4, strong: 7, minGapDays: 2, maxGapDays: 7 }, "send_at defaults to the lower bound of items");
-  const c = parseProfile("x", file("title: x\nscout: 12\nsend_at: 3\nstrong: 8\nmin_gap: 0d\nmax_gap: 3d"));
-  assert.deepEqual(c.scout, { scoutHours: 12, sendAt: 3, strong: 8, minGapDays: 0, maxGapDays: 3 });
-  assert.equal(parseProfile("x", file("title: x\nscout: off")).scout, undefined);
-  assert.match(err("x", file("title: x\nscout: 0h")), /"scout" must be 1h–24h/);
+  const d = parseProfile("x", file("title: x\nitems: 4-9\nwatch: 6h"));
+  assert.deepEqual(d.watch, { watchHours: 6, sendAt: 4, strong: 7, minGapDays: 2, maxGapDays: 7 }, "send_at defaults to the lower bound of items");
+  const c = parseProfile("x", file("title: x\nwatch: 12\nsend_at: 3\nstrong: 8\nmin_gap: 0d\nmax_gap: 3d"));
+  assert.deepEqual(c.watch, { watchHours: 12, sendAt: 3, strong: 8, minGapDays: 0, maxGapDays: 3 });
+  assert.equal(parseProfile("x", file("title: x\nwatch: off")).watch, undefined);
+  assert.match(err("x", file("title: x\nwatch: 0h")), /"watch" must be 1h–24h/);
+  assert.match(err("x", file("title: x\nwatch: 25h")), /"watch" must be 1h–24h/);
+  assert.match(err("x", file("title: x\nwatch: 6h\nstrong: 11")), /"strong" must be 1–10/);
+  assert.match(err("x", file("title: x\nwatch: 6h\nmin_gap: 5d\nmax_gap: 2d")), /"max_gap" must be at least "min_gap"/);
+  assert.match(err("x", file("title: x\nsend_at: 4")), /"send_at" needs "watch"/);
+  // "scout" is the 0.5.0 name: still read, and its errors name it.
+  assert.equal(parseProfile("x", file("title: x\nscout: 6h")).watch?.watchHours, 6);
   assert.match(err("x", file("title: x\nscout: 25h")), /"scout" must be 1h–24h/);
-  assert.match(err("x", file("title: x\nscout: 6h\nstrong: 11")), /"strong" must be 1–10/);
-  assert.match(err("x", file("title: x\nscout: 6h\nmin_gap: 5d\nmax_gap: 2d")), /"max_gap" must be at least "min_gap"/);
-  assert.match(err("x", file("title: x\nsend_at: 4")), /"send_at" needs "scout"/);
+  assert.match(err("x", file("title: x\nwatch: 6h\nscout: 6h")), /"scout" is the old name of "watch"/);
 });

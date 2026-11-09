@@ -11,10 +11,10 @@ import { SECRET, loadConfig, secret } from "./config.ts";
 import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
 import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
-  canonicalUrl, capPerEntity, decide, housekeep, mergeCandidates, parseScoutReply, rescore, scoutSettings, slotOf,
+  canonicalUrl, capPerEntity, decide, housekeep, mergeCandidates, parseCheckReply, rescore, watchSettings, slotOf,
   type Candidate, type Decision, type PoolEntry, type Sighting,
 } from "./pool.ts";
-import { quietNote, scoutMessage, spendTool, toolBudget, writerMessage } from "./scout-instructions.ts";
+import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
 import {
   FEEDBACK_CONVERSATION, KEEP_DIGESTS, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
@@ -26,8 +26,8 @@ import {
 // instance of this class: "<digest>--<run>" for runs (the built-in General
 // digest's runs are "__general--<run>" and keep their topic in state), plus two
 // service actors, "feedback" (votes, sent issues) and "digests" (the definitions).
-// A digest with `scout:` also has a pool actor, "<digest>--pool", which runs
-// scout passes ("<digest>--scout-<slot>") and writes issues from its pool
+// A digest with `watch:` also has a pool actor, "<digest>--pool", which runs
+// checks ("<digest>--check-<slot>") and writes issues from its pool
 // ("<digest>--issue-<slot>"); see pool.ts and docs/spec/0010-continuous-scouting.md.
 // Account-specific settings are Telnyx secrets: see config.ts.
 
@@ -91,22 +91,22 @@ async function feedbackKey(env: ManagedEnv): Promise<string | undefined> {
 /** The service actors, reached in-process. */
 const feedbackActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
 const digestsActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(DIGESTS_CONVERSATION);
-/** A digest's pool actor (continuous scouting). */
+/** A digest's pool actor (watching). */
 export const poolConversation = (digest: string) => `${digest}--pool`;
 const poolActor = (env: ManagedEnv, digest: string) => (env as any).AI_DIGEST.idFromName(poolConversation(digest));
 const DAY_MS = 24 * 3600 * 1000;
-/** A scout pass still counts as running for this long (then a new one may start). */
-const PASS_TIMEOUT_MS = 30 * 60 * 1000;
-/** After this long, a pass that hasn't delivered is checked: its reply is re-delivered, or the pass is given up. */
-const PASS_CHECK_MS = 5 * 60 * 1000;
+/** A check still counts as running for this long (then a new one may start). */
+const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
+/** After this long, a check that hasn't delivered is checked: its reply is re-delivered, or the check is given up. */
+const CHECK_POLL_MS = 5 * 60 * 1000;
 /**
- * Timers are spread out so passes of different digests rarely run at the same
- * time (the runtime has crashed under several parallel passes): the first pass
- * starts 1–16 minutes after scouting is turned on, and every next one is due
+ * Timers are spread out so checks of different digests rarely run at the same
+ * time (the runtime has crashed under several parallel checks): the first check
+ * starts 1–16 minutes after watching is turned on, and every next one is due
  * one interval later, give or take up to 10 minutes.
  */
-const firstPassDelayS = () => 60 + Math.floor(Math.random() * 15 * 60);
-const nextPassDelayS = (hours: number) => Math.max(600, hours * 3600 + Math.floor((Math.random() * 2 - 1) * 600));
+const firstCheckDelayS = () => 60 + Math.floor(Math.random() * 15 * 60);
+const nextCheckDelayS = (hours: number) => Math.max(600, hours * 3600 + Math.floor((Math.random() * 2 - 1) * 600));
 
 /** A digest's definition, parsed; undefined when it isn't stored (or is invalid). */
 async function loadProfile(env: ManagedEnv, id: string): Promise<DigestProfile | undefined> {
@@ -245,11 +245,11 @@ export class AiDigest extends ManagedAgent {
     this.agentEnv = env;
   }
 
-  /** Web tool calls per run, counted for budgeted runs (scout passes, issues). */
+  /** Web tool calls per run, counted for budgeted runs (checks, issues). */
   private toolUse = { run: "", search: 0, fetch: 0 };
 
   /**
-   * Scout passes and issues get a hard web tool budget (the prompt alone was
+   * Checks and issues get a hard web tool budget (the prompt alone was
    * overrun): the built-in web_search/fetch_page reach the platform through
    * this env's TELNYX client, so a call over budget throws here and the tool
    * returns the reason to the model as its error.
@@ -311,11 +311,11 @@ export class AiDigest extends ManagedAgent {
     }
   }
 
-  // ── continuous scouting: the run side (scout passes and issues) ──
+  // ── watching: the run side (checks and issues) ──
 
-  /** A scout pass's window, stored in its conversation before the request (called in-process by the pool actor). */
-  async prepareScoutRun(run: { digest: string; slot: string; since: string; until: string }) {
-    await (this as any).setState({ scoutRun: run });
+  /** A check's window, stored in its conversation before the request (called in-process by the pool actor). */
+  async prepareCheckRun(run: { digest: string; slot: string; since: string; until: string }) {
+    await (this as any).setState({ checkRun: run });
   }
 
   /** An issue run's slot and stories, stored before the request (called in-process by the pool actor). */
@@ -323,39 +323,39 @@ export class AiDigest extends ManagedAgent {
     await (this as any).setState({ issueRun: run });
   }
 
-  /** A scout pass finished: validate and tag its candidates and hand them to the pool. */
-  private async deliverScoutReply(reply: string, run: { digest: string; slot: string; since: string; until: string }) {
-    const { candidates, dropped, seen } = parseScoutReply(reply, run);
+  /** A check finished: validate and tag its candidates and hand them to the pool. */
+  private async deliverCheckReply(reply: string, run: { digest: string; slot: string; since: string; until: string }) {
+    const { candidates, dropped, seen } = parseCheckReply(reply, run);
     const tags = await tagItems(this.agentEnv.TELNYX as any, candidates.map((c) => ({ headline: c.headline, why: c.summary || c.why })));
-    // Variety: at most two candidates about the same product per pass.
+    // Variety: at most two candidates about the same product per check.
     const { kept: tagged, capped } = capPerEntity<Candidate>(candidates.map((c, k) => ({ ...c, tags: tags[k]?.tags ?? [], entities: tags[k]?.entities ?? [] })));
-    console.log(JSON.stringify({ scout: "pass done", digest: run.digest, slot: run.slot, candidates: tagged.length, seen: seen.length, dropped, capped }));
-    // Delivered by a durable task: retried with backoff until the pool takes it (a hung or failed call can't lose a pass).
+    console.log(JSON.stringify({ watch: "check done", digest: run.digest, slot: run.slot, candidates: tagged.length, seen: seen.length, dropped, capped }));
+    // Delivered by a durable task: retried with backoff until the pool takes it (a hung or failed call can't lose a check).
     await (this as any).schedule(0, "deliverToPool", { digest: run.digest, slot: run.slot, candidates: tagged, seen, dropped: dropped + capped }, { id: "deliver", maxRetries: 8 });
   }
 
   /**
-   * Called by the pool for a pass that never delivered (e.g. the runtime
+   * Called by the pool for a check that never delivered (e.g. the runtime
    * restarted before the post-run hook ran): deliver this conversation's
    * last reply again. Returns whether there was a reply to deliver.
    */
-  async recoverPass() {
+  async recoverCheck() {
     const state: any = await (this as any).getState();
-    if (!state?.scoutRun) return { delivered: false, reason: "not a scout pass" };
+    if (!state?.checkRun) return { delivered: false, reason: "not a check" };
     const msgs = (await (this as any).messages.all()) as { role: string; content: string }[];
     const reply = [...msgs].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content;
     if (!reply) return { delivered: false, reason: "no reply" };
-    await this.deliverScoutReply(reply, state.scoutRun);
+    await this.deliverCheckReply(reply, state.checkRun);
     return { delivered: true };
   }
 
-  /** Scheduled by deliverScoutReply; throws on failure so the task is retried. addCandidates ignores a repeat. */
+  /** Scheduled by deliverCheckReply; throws on failure so the task is retried. addCandidates ignores a repeat. */
   async deliverToPool(p: { digest: string; slot: string; candidates: Candidate[]; seen?: Sighting[]; dropped: number }) {
     await poolActor(this.agentEnv, p.digest).addCandidates({ slot: p.slot, candidates: p.candidates, seen: p.seen ?? [], dropped: p.dropped });
-    console.log(JSON.stringify({ scout: "delivered", digest: p.digest, slot: p.slot }));
+    console.log(JSON.stringify({ watch: "delivered", digest: p.digest, slot: p.slot }));
   }
 
-  // ── continuous scouting: the pool actor, "<digest>--pool" ──
+  // ── watching: the pool actor, "<digest>--pool" ──
 
   private poolDigest(): string {
     const id = profileIdOf(this.conversationName());
@@ -378,149 +378,147 @@ export class AiDigest extends ManagedAgent {
   }
 
   /**
-   * Arm or cancel this digest's scout timer from its definition: called when a
+   * Arm or cancel this digest's watch timer from its definition: called when a
    * definition is stored or deleted, and by every deploy (which pushes every
-   * definition), so a lost timer comes back. The first pass runs a minute after
-   * scouting is turned on.
+   * definition), so a lost timer comes back. The first check runs a minute after
+   * watching is turned on.
    */
   async poolConfigure() {
     const id = this.poolDigest();
-    const s = scoutSettings(await loadProfile(this.agentEnv, id));
+    const s = watchSettings(await loadProfile(this.agentEnv, id));
     const { meta } = await this.poolState();
     if (!s) {
-      await (this as any).cancelSchedule("scout").catch(() => false);
-      await (this as any).cancelSchedule("scout-first").catch(() => false);
-      if (meta.enabledAt) await (this as any).setState({ poolMeta: { enabledAt: null, scoutHours: null } });
-      return { digest: id, scouting: false };
+      await (this as any).cancelSchedule("watch").catch(() => false);
+      if (meta.enabledAt) await (this as any).setState({ poolMeta: { enabledAt: null, watchHours: null } });
+      return { digest: id, watching: false };
     }
     // An armed timer with the same interval is left alone, so deploys (which store every
-    // definition again) don't line all digests' passes up; a missing one is re-armed.
+    // definition again) don't line all digests' checks up; a missing one is re-armed.
     const tasks: any[] = await (this as any).listSchedules().catch(() => []);
-    const armed = tasks.find((t) => t.id === "scout");
-    if (armed && !armed.everyMs && meta.scoutHours === s.scoutHours) return { digest: id, scouting: true, everyHours: s.scoutHours, kept: true };
+    const armed = tasks.find((t) => t.id === "watch");
+    if (armed && !armed.everyMs && meta.watchHours === s.watchHours) return { digest: id, watching: true, everyHours: s.watchHours, kept: true };
     const now = new Date().toISOString();
-    await (this as any).cancelSchedule("scout-first").catch(() => false);
-    await (this as any).setState({ poolMeta: { scoutHours: s.scoutHours, ...(meta.enabledAt ? {} : { enabledAt: now, lastIssueAt: meta.lastIssueAt ?? now }) } });
-    const delay = firstPassDelayS();
-    await (this as any).schedule(delay, "scoutTick", {}, { id: "scout" });
-    return { digest: id, scouting: true, everyHours: s.scoutHours, firstPassInMin: Math.round(delay / 60) };
+    await (this as any).setState({ poolMeta: { watchHours: s.watchHours, ...(meta.enabledAt ? {} : { enabledAt: now, lastIssueAt: meta.lastIssueAt ?? now }) } });
+    const delay = firstCheckDelayS();
+    await (this as any).schedule(delay, "watchTick", {}, { id: "watch" });
+    return { digest: id, watching: true, everyHours: s.watchHours, firstCheckInMin: Math.round(delay / 60) };
   }
 
   /** The digest was deleted: stop its timer and forget its pool (a new digest with the same name starts empty). */
   async poolDelete() {
     const id = this.poolDigest();
     const tasks: any[] = await (this as any).listSchedules().catch(() => []);
-    for (const t of [...tasks.map((t) => t.id), "scout", "scout-first"]) await (this as any).cancelSchedule(t).catch(() => false);
+    for (const t of [...tasks.map((t) => t.id), "watch"]) await (this as any).cancelSchedule(t).catch(() => false);
     const { entries } = await this.poolState();
     await (this as any).setState({ poolEntries: null, poolMeta: null });
     console.log(JSON.stringify({ pool: "deleted", digest: id, entries: entries.length }));
-    return { digest: id, scouting: false, cleared: entries.length };
+    return { digest: id, watching: false, cleared: entries.length };
   }
 
-  /** The timer's tick: one scout pass (unless one is still running), then the next tick, an interval later. */
-  async scoutTick() {
-    await this.startPass({}).catch((err: unknown) => console.log(JSON.stringify({ scout: "tick failed", error: err instanceof Error ? err.message : String(err) })));
+  /** The timer's tick: one check (unless one is still running), then the next tick, an interval later. */
+  async watchTick() {
+    await this.startCheck({}).catch((err: unknown) => console.log(JSON.stringify({ watch: "tick failed", error: err instanceof Error ? err.message : String(err) })));
     // The next tick; if the definition can't be read right now, the last known interval keeps the chain going.
     let hours: number | undefined;
     try {
-      hours = scoutSettings(await digestsActor(this.agentEnv).getDigest(this.poolDigest()).then((d: any) => (d ? parseProfile(d.id, d.markdown) : undefined)))?.scoutHours;
+      hours = watchSettings(await digestsActor(this.agentEnv).getDigest(this.poolDigest()).then((d: any) => (d ? parseProfile(d.id, d.markdown) : undefined)))?.watchHours;
     } catch {
-      hours = (await this.poolState()).meta.scoutHours ?? undefined;
+      hours = (await this.poolState()).meta.watchHours ?? undefined;
     }
-    if (hours) await (this as any).schedule(nextPassDelayS(hours), "scoutTick", {}, { id: "scout" });
+    if (hours) await (this as any).schedule(nextCheckDelayS(hours), "watchTick", {}, { id: "watch" });
   }
 
   /**
-   * Start a scout pass now (called in-process by the router, and by the timer).
+   * Start a check now (called in-process by the router, and by the timer).
    * `since`/`until` set the window (e.g. to replay past days); `decide: false`
-   * only fills the pool; `force` writes an issue after the pass whatever the
+   * only fills the pool; `force` writes an issue after the check whatever the
    * thresholds say (a manual run), with an optional focus.
    */
-  async startPass(opts: { since?: string; until?: string; decide?: boolean; force?: { focus?: string } }) {
+  async startCheck(opts: { since?: string; until?: string; decide?: boolean; force?: { focus?: string } }) {
     const id = this.poolDigest();
     const profile = await loadProfile(this.agentEnv, id);
-    if (!scoutSettings(profile)) return { ok: false, error: `"${id}" doesn't scout: add "scout: 6h" to its definition` };
+    if (!watchSettings(profile)) return { ok: false, error: `"${id}" doesn't watch: add "watch: 6h" to its definition` };
     const { entries, meta } = await this.poolState();
     const now = new Date();
-    if (meta.passRunning) {
-      const age = now.getTime() - Date.parse(meta.passRunning.startedAt);
-      const running = `${id}--scout-${meta.passRunning.slot}`;
-      if (age < PASS_CHECK_MS) {
-        console.log(JSON.stringify({ scout: "skipped", digest: id, reason: "a pass is running", running: meta.passRunning.slot }));
-        return { ok: false, error: "a scout pass is already running", conversation: running };
+    if (meta.checkRunning) {
+      const age = now.getTime() - Date.parse(meta.checkRunning.startedAt);
+      const running = `${id}--check-${meta.checkRunning.slot}`;
+      if (age < CHECK_POLL_MS) {
+        console.log(JSON.stringify({ watch: "skipped", digest: id, reason: "a check is running", running: meta.checkRunning.slot }));
+        return { ok: false, error: "a check is already running", conversation: running };
       }
-      // A pass that should have delivered by now: wait while its run is still going,
+      // A check that should have delivered by now: wait while its run is still going,
       // else re-deliver its reply (e.g. the runtime restarted before its post-run hook), else give it up.
-      if (age < PASS_TIMEOUT_MS) {
-        if (await this.passStillRunning(running)) return { ok: false, error: "a scout pass is still running", conversation: running };
-        const r = await (this.agentEnv as any).AI_DIGEST.idFromName(running).recoverPass().catch(() => ({ delivered: false, reason: "unreachable" }));
+      if (age < CHECK_TIMEOUT_MS) {
+        if (await this.checkStillRunning(running)) return { ok: false, error: "a check is still running", conversation: running };
+        const r = await (this.agentEnv as any).AI_DIGEST.idFromName(running).recoverCheck().catch(() => ({ delivered: false, reason: "unreachable" }));
         if (r.delivered) {
-          console.log(JSON.stringify({ scout: "recovered", digest: id, conversation: running }));
-          return { ok: false, error: "the previous pass's reply was delivered again; start a new pass in a minute", conversation: running };
+          console.log(JSON.stringify({ watch: "recovered", digest: id, conversation: running }));
+          return { ok: false, error: "the previous check's reply was delivered again; start a new check in a minute", conversation: running };
         }
       }
-      console.log(JSON.stringify({ scout: "gave up", digest: id, conversation: running, ageMin: Math.round(age / 60000) }));
+      console.log(JSON.stringify({ watch: "gave up", digest: id, conversation: running, ageMin: Math.round(age / 60000) }));
     }
     const until = opts.until ?? now.toISOString();
-    const since = opts.since ?? (meta.lastPassAt ? new Date(Date.parse(meta.lastPassAt) - 3600_000).toISOString() : new Date(Date.parse(until) - profile!.windowDays * DAY_MS).toISOString());
+    const since = opts.since ?? (meta.lastCheckAt ? new Date(Date.parse(meta.lastCheckAt) - 3600_000).toISOString() : new Date(Date.parse(until) - profile!.windowDays * DAY_MS).toISOString());
     const slot = now.toISOString().slice(0, 19).replace(/[:]/g, "").toLowerCase();
-    const conversation = `${id}--scout-${slot}`;
+    const conversation = `${id}--check-${slot}`;
     const known = entries
       .filter((e) => e.state !== "expired")
       .sort((a, b) => b.firstSeen.localeCompare(a.firstSeen))
       .map((e) => ({ id: e.id, headline: e.headline }));
-    await (this as any).setState({ poolMeta: { passRunning: { slot, startedAt: now.toISOString(), since, until, decide: opts.decide ?? true, force: opts.force ?? null } } });
+    await (this as any).setState({ poolMeta: { checkRunning: { slot, startedAt: now.toISOString(), since, until, decide: opts.decide ?? true, force: opts.force ?? null } } });
     // The run starts on an immediate task, so the caller (an API request) doesn't wait for actor start-ups.
-    await (this as any).schedule(0, "runPass", { slot, since, until, known }, { id: `pass-${slot}` });
+    await (this as any).schedule(0, "runCheck", { slot, since, until, known }, { id: `check-${slot}` });
     return { ok: true, conversation, since, until };
   }
 
-  /** Whether a pass's conversation still has a run in progress (its latest trace). */
-  private async passStillRunning(conversation: string): Promise<boolean> {
+  /** Whether a check's conversation still has a run in progress (its latest trace). */
+  private async checkStillRunning(conversation: string): Promise<boolean> {
     const t = await (this.agentEnv as any).AI_DIGEST.idFromName(conversation).traces(1).catch(() => undefined);
     const status = t?.runs?.[0]?.status;
     return status === "running" || status === "accepted" || status === "queued";
   }
 
-  /** Scheduled by startPass: hand the request to the pass's own conversation. */
-  async runPass(p: { slot: string; since: string; until: string; known: { id: string; headline: string }[] }) {
+  /** Scheduled by startCheck: hand the request to the check's own conversation. */
+  async runCheck(p: { slot: string; since: string; until: string; known: { id: string; headline: string }[] }) {
     const id = this.poolDigest();
     const profile = await loadProfile(this.agentEnv, id);
     if (!profile) return;
-    const conversation = `${id}--scout-${p.slot}`;
+    const conversation = `${id}--check-${p.slot}`;
     const run = (this.agentEnv as any).AI_DIGEST.idFromName(conversation);
-    await run.prepareScoutRun({ digest: id, slot: p.slot, since: p.since, until: p.until });
-    await run.receive(scoutMessage(profile, { since: p.since, until: p.until, known: p.known }));
-    console.log(JSON.stringify({ scout: "pass started", digest: id, conversation, since: p.since, until: p.until }));
+    await run.prepareCheckRun({ digest: id, slot: p.slot, since: p.since, until: p.until });
+    await run.receive(checkMessage(profile, { since: p.since, until: p.until, known: p.known }));
+    console.log(JSON.stringify({ watch: "check started", digest: id, conversation, since: p.since, until: p.until }));
   }
 
-  /** A scout pass's candidates (from its conversation's post-run hook): merge, score, decide. */
+  /** A check's candidates (from its conversation's post-run hook): merge, score, decide. */
   async addCandidates(p: { slot: string; candidates: Candidate[]; seen?: Sighting[]; dropped: number }) {
     const id = this.poolDigest();
     const { entries, meta } = await this.poolState();
-    if (meta.lastPassSlot === p.slot) return { duplicate: true }; // at-least-once delivery
+    if (meta.lastCheckSlot === p.slot) return { duplicate: true }; // at-least-once delivery
     const profile = await loadProfile(this.agentEnv, id);
-    const run = meta.passRunning?.slot === p.slot ? meta.passRunning : undefined;
+    const run = meta.checkRunning?.slot === p.slot ? meta.checkRunning : undefined;
     const now = new Date().toISOString();
     const merged = mergeCandidates(entries, p.candidates, now, p.seen ?? []);
     const pool = await this.refreshed(id, merged.pool, profile, now);
-    const pass = { slot: p.slot, at: now, since: run?.since, until: run?.until, added: merged.added, merged: merged.merged, resighted: merged.resighted, dropped: p.dropped };
+    const check = { slot: p.slot, at: now, since: run?.since, until: run?.until, added: merged.added, merged: merged.merged, resighted: merged.resighted, dropped: p.dropped };
     const decision = profile && run?.decide !== false ? this.decision(pool, profile, meta, now, !!run?.force) : undefined;
     await this.savePool(entries, pool, {
-      // A replayed pass (an `until` in the past) never moves the clock back.
-      lastPassAt: [meta.lastPassAt, run?.until ?? now].filter(Boolean).sort().pop(),
-      lastPassSlot: p.slot,
-      passRunning: null,
-      lastPass: pass,
-      passes: (meta.passes ?? 0) + 1,
+      // A replayed check (an `until` in the past) never moves the clock back.
+      lastCheckAt: [meta.lastCheckAt, run?.until ?? now].filter(Boolean).sort().pop(),
+      lastCheckSlot: p.slot,
+      checkRunning: null,
+      lastCheck: check,
+      checks: (meta.checks ?? 0) + 1,
       ...(decision ? { lastDecision: { ...decision, at: now } } : {}),
     });
-    console.log(JSON.stringify({ pool: "merged", digest: id, ...pass, live: pool.filter((e) => e.state === "candidate").length, decision: decision?.action ?? "skipped", reason: decision?.reason }));
+    console.log(JSON.stringify({ pool: "merged", digest: id, ...check, live: pool.filter((e) => e.state === "candidate").length, decision: decision?.action ?? "skipped", reason: decision?.reason }));
     if (decision && decision.action !== "none" && profile) await this.startIssue(id, profile, pool, decision, meta, run?.force?.focus);
     return { added: merged.added, merged: merged.merged, decision: decision?.action ?? "skipped" };
   }
 
-  /** Write an issue from the pool now, without a scout pass (a manual run with scouting off for this run). Queued, so the caller doesn't wait. */
+  /** Write an issue from the pool now, without a check (a manual run with watching off for this run). Queued, so the caller doesn't wait. */
   async writeNow(opts: { focus?: string } = {}) {
     const id = this.poolDigest();
     await (this as any).schedule(0, "runWriteNow", opts, { id: "write-now" });
@@ -548,7 +546,7 @@ export class AiDigest extends ManagedAgent {
   }
 
   private decision(pool: PoolEntry[], profile: DigestProfile, meta: any, now: string, force: boolean): Decision {
-    const s = scoutSettings(profile) ?? { scoutHours: 24, sendAt: profile.items.min, strong: 7, minGapDays: 0, maxGapDays: 30 };
+    const s = watchSettings(profile) ?? { watchHours: 24, sendAt: profile.items.min, strong: 7, minGapDays: 0, maxGapDays: 30 };
     return decide(pool, s, meta.lastIssueAt ?? meta.enabledAt ?? now, now, profile.items.max, force);
   }
 
@@ -570,7 +568,7 @@ export class AiDigest extends ManagedAgent {
     await this.savePool(pool, reserved, { issueRunning: { slot, startedAt: now, stories: ids.length } });
     const run = (this.agentEnv as any).AI_DIGEST.idFromName(conversation);
     await run.prepareIssueRun({ slot, ids });
-    const s = scoutSettings(profile);
+    const s = watchSettings(profile);
     await run.receive(writerMessage(profile, chosen, { quiet: d.action === "issue-anyway" && !!s && d.strong < s.sendAt, focus }));
     console.log(JSON.stringify({ pool: "issue started", digest: id, conversation, stories: ids.length, reason: d.reason }));
     return { conversation, stories: ids.length };
@@ -604,19 +602,19 @@ export class AiDigest extends ManagedAgent {
     const profile = await loadProfile(this.agentEnv, id);
     const { entries, meta } = await this.poolState();
     const tasks: any[] = await (this as any).listSchedules().catch(() => []);
-    const next = tasks.filter((t) => t.name === "scoutTick").map((t) => t.dueAt ?? t.due ?? t.at ?? t.nextAt).filter(Boolean).sort()[0];
+    const next = tasks.filter((t) => t.name === "watchTick").map((t) => t.dueAt ?? t.due ?? t.at ?? t.nextAt).filter(Boolean).sort()[0];
     const order: Record<string, number> = { candidate: 0, reserved: 1, sent: 2, expired: 3 };
     const sorted = [...entries].sort((a, b) => order[a.state]! - order[b.state]! || b.score - a.score);
-    const s = scoutSettings(profile);
+    const s = watchSettings(profile);
     return {
       digest: id,
-      scout: s ?? null,
-      nextPassAt: next ? new Date(typeof next === "number" ? next : Date.parse(next)).toISOString() : null,
+      watch: s ?? null,
+      nextCheckAt: next ? new Date(typeof next === "number" ? next : Date.parse(next)).toISOString() : null,
       enabledAt: meta.enabledAt ?? null,
-      lastPassAt: meta.lastPassAt ?? null,
-      lastPass: meta.lastPass ?? null,
-      passes: meta.passes ?? 0,
-      passRunning: meta.passRunning ?? null,
+      lastCheckAt: meta.lastCheckAt ?? null,
+      lastCheck: meta.lastCheck ?? null,
+      checks: meta.checks ?? 0,
+      checkRunning: meta.checkRunning ?? null,
       lastIssueAt: meta.lastIssueAt ?? null,
       lastIssue: meta.lastIssue ?? null,
       issueRunning: meta.issueRunning ?? null,
@@ -654,8 +652,8 @@ export class AiDigest extends ManagedAgent {
       if (started && (state?.emailedAt ?? 0) >= started) return;
       const msgs = ((await (this as any).messages.all()) as { seq: number; role: string; content: string }[]).filter((m) => m.seq > before);
       const reply = [...msgs].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content ?? "";
-      // A scout pass: hand its candidates to the pool; never emailed.
-      if (state?.scoutRun) return await this.deliverScoutReply(reply, state.scoutRun);
+      // A check: hand its candidates to the pool; never emailed.
+      if (state?.checkRun) return await this.deliverCheckReply(reply, state.checkRun);
       const digest = digestFromReply(reply);
       if (!digest) return; // not a digest (an answer, an error, a question): nothing to email
       const { subject, markdown } = digest;
@@ -831,7 +829,7 @@ export class AiDigest extends ManagedAgent {
 
   // ── the `digests` actor: digest definitions (called in-process by the router) ──
 
-  /** Every stored digest: id, title, window, items, scouting settings, when it changed. */
+  /** Every stored digest: id, title, window, items, watching settings, when it changed. */
   async listDigests() {
     const state: any = await (this as any).getState();
     return Object.values(state?.profiles ?? {})
@@ -841,7 +839,7 @@ export class AiDigest extends ManagedAgent {
         try {
           p = parseProfile(d.id, d.markdown);
         } catch {}
-        return { id: d.id, title: p?.title ?? null, windowDays: p?.windowDays ?? null, items: p?.items ?? null, scout: p?.scout ?? null, updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 };
+        return { id: d.id, title: p?.title ?? null, windowDays: p?.windowDays ?? null, items: p?.items ?? null, watch: p?.watch ?? null, scout: p?.watch ?? null /* the 0.5.0 name */, updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 };
       })
       .sort((a: any, b: any) => a.id.localeCompare(b.id));
   }

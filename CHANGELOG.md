@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **Scouting is now called watching.** The setting is `watch: 6h`; a pass is a **check**, run in `<digest>--check-<time>`. `POST /v1/digests/<id>/check` starts one (`npm run digests -- watch <id>`), `"check": false` on a run writes from the pool (`npm run digests -- run <id> --from-pool`), the digests page shows a "Watching" card, and `GET /v1/digests` and `PUT` return `watch` and `watching`. The 0.5.0 names still work: `scout:` in a definition, `/scout`, `"scout": false`, `--no-scout`, `npm run digests -- scout`, and the `scout`/`scouting` response fields.
+- README: watching in the definition example, the commands, the diagram and the project layout.
+
 ## [0.5.0] - 2026-11-09
 
 ### Added

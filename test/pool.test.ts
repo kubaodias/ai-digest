@@ -1,16 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  canonicalUrl, capPerEntity, trending, FLOOR, decide, entryId, housekeep, mergeCandidates, parseScoutReply, rescore, sameStory, scoreEntry, slotOf, titleOverlap,
-  MAX_PER_PASS, RESERVATION_MS, type Candidate, type PoolEntry, type ScoutSettings,
+  canonicalUrl, capPerEntity, trending, FLOOR, decide, entryId, housekeep, mergeCandidates, parseCheckReply, rescore, sameStory, scoreEntry, slotOf, titleOverlap,
+  MAX_PER_CHECK, RESERVATION_MS, type Candidate, type PoolEntry, type WatchSettings,
 } from "../src/pool.ts";
-import { formatRange, quietNote, scoutMessage, spendTool, storiesRange, toolBudget, writerMessage, SCOUT_BUDGET, WRITER_CHECKS } from "../src/scout-instructions.ts";
+import { formatRange, quietNote, checkMessage, spendTool, storiesRange, toolBudget, writerMessage, CHECK_BUDGET, WRITER_CHECKS } from "../src/watch-instructions.ts";
 import { parseProfile } from "../src/profile.ts";
 
 const NOW = "2026-11-09T12:00:00.000Z";
 const DAY = 24 * 3600 * 1000;
 const ago = (days: number) => new Date(Date.parse(NOW) - days * DAY).toISOString();
-const S: ScoutSettings = { scoutHours: 6, sendAt: 3, strong: 7, minGapDays: 2, maxGapDays: 7 };
+const S: WatchSettings = { watchHours: 6, sendAt: 3, strong: 7, minGapDays: 2, maxGapDays: 7 };
 
 const cand = (o: Partial<Candidate> = {}): Candidate => ({
   headline: "Acme releases Harness 2.0 with sandboxed tool calls",
@@ -48,9 +48,9 @@ test("canonicalUrl: one article, whatever link it came with", () => {
 
 test("slotOf: a short time name", () => assert.equal(slotOf("2026-11-16T06:00:00.000Z"), "2026-11-16t0600"));
 
-// ── the scout reply ──
+// ── the check reply ──
 
-test("parseScoutReply: fenced JSON, validated, dates in the window, capped", () => {
+test("parseCheckReply: fenced JSON, validated, dates in the window, capped", () => {
   const items = [
     { headline: "Good", url: "https://a.example.com/x", importance: 12, published: "2026-11-08", otherSources: ["https://b.example.com/y", "nope"] },
     { headline: "No URL" },
@@ -60,7 +60,7 @@ test("parseScoutReply: fenced JSON, validated, dates in the window, capped", () 
     { headline: "No date is fine", url: "https://e.example.com/", importance: "x" },
   ];
   const text = "Here you go:\n```json\n" + JSON.stringify({ candidates: items }) + "\n```";
-  const r = parseScoutReply(text, { since: "2026-11-07T00:00:00Z", until: NOW });
+  const r = parseCheckReply(text, { since: "2026-11-07T00:00:00Z", until: NOW });
   assert.deepEqual(r.candidates.map((c) => c.headline), ["Good", "No date is fine"]);
   assert.equal(r.candidates[0]!.importance, 10, "clamped");
   assert.equal(r.candidates[1]!.importance, 5, "missing → 5");
@@ -68,8 +68,8 @@ test("parseScoutReply: fenced JSON, validated, dates in the window, capped", () 
   assert.equal(r.candidates[0]!.source, "a.example.com", "source from the URL when missing");
   assert.equal(r.dropped, 4);
   const many = { candidates: Array.from({ length: 30 }, (_, k) => ({ headline: `S${k}`, url: `https://x.example.com/${k}` })) };
-  assert.equal(parseScoutReply(JSON.stringify(many), { since: ago(2), until: NOW }).candidates.length, MAX_PER_PASS);
-  assert.deepEqual(parseScoutReply("I couldn't find anything.", { since: ago(1), until: NOW }).candidates, []);
+  assert.equal(parseCheckReply(JSON.stringify(many), { since: ago(2), until: NOW }).candidates.length, MAX_PER_CHECK);
+  assert.deepEqual(parseCheckReply("I couldn't find anything.", { since: ago(1), until: NOW }).candidates, []);
 });
 
 // ── merging ──
@@ -107,7 +107,7 @@ test("merge: a repeat of a sent story counts as a sighting but doesn't come back
   assert.equal(r.pool[0]!.importance, 7, "a sent entry keeps its data");
 });
 
-test("merge: two candidates for one story in a pass count one sighting", () => {
+test("merge: two candidates for one story in a check count one sighting", () => {
   const r = mergeCandidates([], [cand(), cand({ url: "https://acme.example.com/blog/harness-2?utm_campaign=x" })], NOW);
   assert.equal(r.pool.length, 1);
   assert.equal(r.pool[0]!.sightings, 1);
@@ -204,17 +204,17 @@ test("decide: only live candidates count; force sends what there is", () => {
 
 // ── the requests ──
 
-const profile = parseProfile("harness-watch", "---\ntitle: \"Harness Watch — {range}\"\nitems: 3-6\nscout: 6h\n---\nAgent harnesses, for engineers building agents.\n");
+const profile = parseProfile("harness-watch", "---\ntitle: \"Harness Watch — {range}\"\nitems: 3-6\nwatch: 6h\n---\nAgent harnesses, for engineers building agents.\n");
 
-test("the scout request: window, budget, known stories with ids, JSON only", () => {
-  const m = scoutMessage(profile, { since: "2026-11-09T05:00:00.000Z", until: NOW, known: [{ id: "abc", headline: "Known story" }] });
-  assert.match(m, /^SCOUT PASS\./);
+test("the check request: window, budget, known stories with ids, JSON only", () => {
+  const m = checkMessage(profile, { since: "2026-11-09T05:00:00.000Z", until: NOW, known: [{ id: "abc", headline: "Known story" }] });
+  assert.match(m, /^WATCH CHECK\./);
   assert.match(m, /between 2026-11-09 05:00 and 2026-11-09 12:00 UTC/);
-  assert.match(m, new RegExp(`at most ${SCOUT_BUDGET} tool calls`));
+  assert.match(m, new RegExp(`at most ${CHECK_BUDGET} tool calls`));
   assert.match(m, /- \[abc\] Known story/);
   assert.match(m, /Agent harnesses, for engineers/);
   assert.match(m, /"candidates"/);
-  assert.match(scoutMessage(profile, { since: ago(7), until: NOW, known: [] }), /first pass/);
+  assert.match(checkMessage(profile, { since: ago(7), until: NOW, known: [] }), /first check/);
 });
 
 test("the writer request: the stories, no search, title and items", () => {
@@ -241,15 +241,15 @@ test("seen: known stories found again count as sightings, with new sources; unkn
   const pool = mergeCandidates([], [cand()], ago(1)).pool;
   const id = pool[0]!.id;
   const text = JSON.stringify({ candidates: [], seen: [{ id, sources: ["https://news.example.org/acme", "bad"] }, "unknown-id", { nope: 1 }] });
-  const r = parseScoutReply(text, { since: ago(2), until: NOW });
+  const r = parseCheckReply(text, { since: ago(2), until: NOW });
   assert.deepEqual(r.seen, [{ id, sources: ["https://news.example.org/acme"] }, { id: "unknown-id", sources: [] }]);
   const m = mergeCandidates(pool, [], NOW, r.seen);
   assert.equal(m.resighted, 1);
   assert.equal(m.pool[0]!.sightings, 2);
   assert.deepEqual(m.pool[0]!.sources.map((s) => s.domain).sort(), ["acme.example.com", "news.example.org"]);
   const both = mergeCandidates(pool, [cand({ url: "https://acme.example.com/blog/harness-2?utm_source=x" })], NOW, [{ id, sources: [] }]);
-  assert.equal(both.pool[0]!.sightings, 2, "seen and re-reported in one pass: one sighting");
-  assert.match(scoutMessage(profile, { since: ago(1), until: NOW, known: [{ id: "abc", headline: "K" }] }), /under "seen"/);
+  assert.equal(both.pool[0]!.sightings, 2, "seen and re-reported in one check: one sighting");
+  assert.match(checkMessage(profile, { since: ago(1), until: NOW, known: [{ id: "abc", headline: "K" }] }), /under "seen"/);
 });
 
 // ── quality and variety ──
@@ -267,7 +267,7 @@ test("floor: forced and max_gap issues leave out weak stories, unless nothing re
   if (t.action !== "none") assert.equal(t.ids.length, 3, "a threshold issue isn't padded with weak stories either");
 });
 
-test("capPerEntity: at most two candidates per product per pass, most important first; untagged pass", () => {
+test("capPerEntity: at most two candidates per product per check, most important first; untagged check", () => {
   const c = (h: string, e: string[]) => ({ headline: h, entities: e });
   const r = capPerEntity([c("a", ["Claude Code"]), c("b", ["claude-code"]), c("c", ["claude code", "mcp"]), c("d", ["codex"]), c("e", []), c("f", [])]);
   assert.deepEqual(r.kept.map((x) => x.headline), ["a", "b", "d", "e", "f"]);
@@ -286,8 +286,8 @@ test("decide: an issue has at most two stories about the same product; the rest 
   if (d.action !== "none") assert.deepEqual(d.ids, ["p0", "p1", "p3", "p4"]);
 });
 
-test("the scout request asks for variety and for the other outlets covering a story", () => {
-  const m = scoutMessage(profile, { since: ago(1), until: NOW, known: [] });
+test("the check request asks for variety and for the other outlets covering a story", () => {
+  const m = checkMessage(profile, { since: ago(1), until: NOW, known: [] });
   assert.match(m, /Hacker News, Reddit/);
   assert.match(m, /at most 2 tool calls on release notes/);
   assert.match(m, /at most 2 candidates about the same product/);
@@ -311,15 +311,15 @@ test("the writer request: limited link checks, several sources per item, trendin
   assert.match(m, /about: acme harness/);
 });
 
-test("tool budgets: scout passes and issues are capped in code, other runs aren't", () => {
+test("tool budgets: checks and issues are capped in code, other runs aren't", () => {
   assert.equal(toolBudget("ai-swe--2026-11-09t1500"), undefined);
   assert.equal(toolBudget("ai-swe--pool"), undefined);
-  const scout = toolBudget("harness-test--scout-2026-11-09t151355")!;
+  const check = toolBudget("harness-test--check-2026-11-09t151355")!;
   const used = { search: 0, fetch: 0 };
-  for (let k = 0; k < SCOUT_BUDGET; k++) assert.equal(spendTool(scout, used, k % 2 ? "/web_search" : "/web_search/contents"), undefined);
-  assert.match(spendTool(scout, used, "/web_search")!, /budget spent: 8 tool calls/);
-  assert.equal(used.search + used.fetch, SCOUT_BUDGET, "a refused call isn't counted");
-  assert.equal(spendTool(scout, used, "/ai/chat/completions"), undefined, "other platform calls pass");
+  for (let k = 0; k < CHECK_BUDGET; k++) assert.equal(spendTool(check, used, k % 2 ? "/web_search" : "/web_search/contents"), undefined);
+  assert.match(spendTool(check, used, "/web_search")!, /budget spent: 8 tool calls/);
+  assert.equal(used.search + used.fetch, CHECK_BUDGET, "a refused call isn't counted");
+  assert.equal(spendTool(check, used, "/ai/chat/completions"), undefined, "other platform calls pass");
   const issue = toolBudget("harness-test--issue-2026-11-09t1524")!;
   const u2 = { search: 0, fetch: 0 };
   assert.match(spendTool(issue, u2, "/web_search")!, /no web searches/);

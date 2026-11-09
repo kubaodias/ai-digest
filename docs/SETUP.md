@@ -92,7 +92,7 @@ items: 5-10                               # optional: how many items (default 5-
 closing: Takeaways                        # optional: closing section heading, or "none" (default "Themes this week")
 images: on                                # optional: pictures from the articles (default on)
 to: team@example.com                      # optional: recipients instead of DIGEST_EMAIL_TO
-scout: 6h                                 # optional: look for new stories every 6 hours (see step 9)
+watch: 6h                                 # optional: check for new stories every 6 hours (see step 9)
 ---
 What to cover and who it's for, in a sentence or two (the first sentence is also
 used to judge which pictures help this reader).
@@ -170,27 +170,28 @@ The page is read-only. It shows:
 
 Sign-in links and sessions are signed with keys derived from `AGENT_AUTH_KEY`, so changing that key signs every browser out.
 
-## 9. Let a digest scout on its own
+## 9. Let a digest watch its topic
 
-Add `scout:` to a digest and it looks for new stories at a fixed interval, keeps them in a pool, and sends an issue when enough strong ones have gathered, or after `max_gap` at the latest, whatever the pool holds ([design](spec/0010-continuous-scouting.md)):
+Add `watch:` to a digest and it checks for new stories at a fixed interval, keeps them in a pool, and sends an issue when enough strong ones have gathered, or after `max_gap` at the latest, whatever the pool holds ([design](spec/0010-continuous-scouting.md); it was called scouting in 0.5.0, and `scout:` still works):
 
 ```yaml
-scout: 6h          # a small research pass every 6 hours (1h–24h)
+watch: 6h          # a short check for new stories every 6 hours (1h–24h)
 send_at: 6         # an issue once 6 stories score at least `strong` (default: the lower bound of items)
 strong: 7          # the score that counts as strong, 1–10 (default 7)
 min_gap: 2d        # never more often than this (default 2d)
 max_gap: 7d        # at least this often, even with few strong stories (default 7d); an empty pool sends a short "nothing new" note
 ```
 
-Push the file and the timer starts; the first pass runs a minute later. Every deploy re-arms the timers, and removing `scout:` (or the digest) stops it.
+Push the file and the timer starts; the first check runs 1–16 minutes later, then every interval (± 10 minutes, so digests don't all check at once). Every deploy re-arms lost timers, and removing `watch:` (or the digest) stops it; deleting the digest also empties its pool.
 
-- **Scores** combine the model's importance estimate with how many independent sources covered a story, how many passes found it again, primary sources, your feedback, and age. A story mainly about a product you said you don't use never gets in.
+- **Scores** combine the model's importance estimate with how many independent sources covered a story, how many checks found it again, primary sources, your feedback, and age. A story mainly about a product you said you don't use never gets in.
+- **Variety:** an issue has at most 2 stories about the same product (the rest wait for the next one), and lists up to 3 sources per story, the maker's own page first.
 - **Pictures** are only picked when an issue is sent, for the stories in it.
-- **Follow it:** `npm run digests -- pool <id>` shows the pool, the next pass and why no issue has gone out yet; the digests page has the same card.
-- **By hand:** `npm run digests -- run <id>` runs a pass and then writes an issue from the pool whatever the thresholds say (`--no-scout`: write from the pool now). `npm run digests -- scout <id> [--since 2026-11-02 --until 2026-11-04] [--no-send]` runs a pass now, optionally over a past window and without sending.
-- **Cost:** each pass is a short research run (a budget of about 8 searches and page reads), so `scout: 6h` costs several times one weekly run. Use `12h` or `24h` for slow topics.
+- **Follow it:** `npm run digests -- pool <id>` shows the pool, the next check and why no issue has gone out yet; the digests page has the same card.
+- **By hand:** `npm run digests -- run <id>` runs a check and then writes an issue from the pool whatever the thresholds say (`--from-pool`: write from the pool now). `npm run digests -- watch <id> [--since 2026-11-02 --until 2026-11-04] [--no-send]` runs a check now, optionally over a past window and without sending.
+- **Cost:** each check is a short research run with a hard budget of 8 searches and page reads (about 30–50k tokens), so `watch: 6h` costs several times one weekly run. Use `12h` or `24h` for slow topics.
 
-A digest without `scout:` keeps working on request. To run those on a schedule, trigger runs from anywhere that has the repo and `.env`, e.g. cron on a machine you control:
+A digest without `watch:` keeps working on request. To run those on a schedule, trigger runs from anywhere that has the repo and `.env`, e.g. cron on a machine you control:
 
 ```cron
 0 7 * * 1  cd /path/to/ai-digest && npm run digests -- run ai-swe
