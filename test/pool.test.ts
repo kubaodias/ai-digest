@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  canonicalUrl, decide, entryId, housekeep, mergeCandidates, parseScoutReply, rescore, sameStory, scoreEntry, slotOf, titleOverlap,
+  canonicalUrl, capPerEntity, trending, FLOOR, decide, entryId, housekeep, mergeCandidates, parseScoutReply, rescore, sameStory, scoreEntry, slotOf, titleOverlap,
   MAX_PER_PASS, RESERVATION_MS, type Candidate, type PoolEntry, type ScoutSettings,
 } from "../src/pool.ts";
-import { quietNote, scoutMessage, writerMessage, SCOUT_BUDGET } from "../src/scout-instructions.ts";
+import { quietNote, scoutMessage, writerMessage, SCOUT_BUDGET, WRITER_CHECKS } from "../src/scout-instructions.ts";
 import { parseProfile } from "../src/profile.ts";
 
 const NOW = "2026-11-09T12:00:00.000Z";
@@ -250,4 +250,50 @@ test("seen: known stories found again count as sightings, with new sources; unkn
   const both = mergeCandidates(pool, [cand({ url: "https://acme.example.com/blog/harness-2?utm_source=x" })], NOW, [{ id, sources: [] }]);
   assert.equal(both.pool[0]!.sightings, 2, "seen and re-reported in one pass: one sighting");
   assert.match(scoutMessage(profile, { since: ago(1), until: NOW, known: [{ id: "abc", headline: "K" }] }), /under "seen"/);
+});
+
+// ── quality and variety ──
+
+test("floor: forced and max_gap issues leave out weak stories, unless nothing reaches the floor", () => {
+  const pool = [...live(2, 8), ...live(2, FLOOR), ...live(3, 3)];
+  const f = decide(pool, S, ago(0), NOW, 10, true);
+  if (f.action !== "none") assert.deepEqual(f.ids.length, 4, "only stories scoring 5+");
+  const a = decide(pool, S, ago(8), NOW, 10);
+  assert.equal(a.action, "issue-anyway");
+  if (a.action !== "none") assert.equal(a.ids.length, 4);
+  const weak = decide(live(5, 2), S, ago(8), NOW, 10);
+  if (weak.action !== "none") assert.equal(weak.ids.length, 3, "nothing reaches the floor: the best three anyway");
+  const t = decide([...live(3, 8), ...live(3, 4)], S, ago(3), NOW, 10);
+  if (t.action !== "none") assert.equal(t.ids.length, 3, "a threshold issue isn't padded with weak stories either");
+});
+
+test("capPerEntity: at most two candidates per product per pass, most important first; untagged pass", () => {
+  const c = (h: string, e: string[]) => ({ headline: h, entities: e });
+  const r = capPerEntity([c("a", ["Claude Code"]), c("b", ["claude-code"]), c("c", ["claude code", "mcp"]), c("d", ["codex"]), c("e", []), c("f", [])]);
+  assert.deepEqual(r.kept.map((x) => x.headline), ["a", "b", "d", "e", "f"]);
+  assert.equal(r.capped, 1);
+});
+
+test("trending: three sources or three sightings", () => {
+  assert.equal(trending({ sources: [1, 2, 3].map((k) => ({ domain: `d${k}`, url: "u" })), sightings: 1 }), true);
+  assert.equal(trending({ sources: [{ domain: "a", url: "u" }], sightings: 3 }), true);
+  assert.equal(trending({ sources: [{ domain: "a", url: "u" }, { domain: "b", url: "u" }], sightings: 2 }), false);
+});
+
+test("the scout request asks for variety and for the other outlets covering a story", () => {
+  const m = scoutMessage(profile, { since: ago(1), until: NOW, known: [] });
+  assert.match(m, /Hacker News, Reddit/);
+  assert.match(m, /at most 2 tool calls on release notes/);
+  assert.match(m, /at most 2 candidates about the same product/);
+  assert.match(m, /"otherSources": that's how stories everyone is talking about are recognised/);
+});
+
+test("the writer request: limited link checks, several sources per item, trending stories marked", () => {
+  const hot = entry({ sightings: 2, sources: ["acme.example.com", "news.example.org", "blog.example.net", "forum.example.io"].map((d) => ({ domain: d, url: `https://${d}/x` })) });
+  const cold = entry({ id: "cold", headline: "Quiet story", sources: [{ domain: "a.example.com", url: "https://a.example.com/x" }], sightings: 1 });
+  const m = writerMessage(profile, [hot, cold], { quiet: false });
+  assert.match(m, new RegExp(`fetch_page at most ${WRITER_CHECKS} times`));
+  assert.match(m, /\*\*Sources:\*\* \[site\]\(url\) · \[site\]\(url\) · date/);
+  assert.match(m, /trending: covered by 4 sources, found in 2 searches/);
+  assert.equal(m.match(/trending:/g)?.length, 1, "only the trending story is marked");
 });

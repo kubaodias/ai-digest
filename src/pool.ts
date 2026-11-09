@@ -81,6 +81,12 @@ export const MAX_CANDIDATES = 200;
 export const RESERVATION_MS = 60 * 60 * 1000;
 /** Candidates a single pass may report. */
 export const MAX_PER_PASS = 15;
+/** Candidates a single pass may add about the same product or company (variety). */
+export const MAX_PER_ENTITY = 2;
+/** Forced and max_gap issues leave out stories below this score, unless none reach it. */
+export const FLOOR = 5;
+/** A story counts as trending from this many independent sources or sightings. */
+export const TRENDING = 3;
 /** Pool headlines listed in a scout request as "known". */
 export const KNOWN_IN_REQUEST = 60;
 const DAY = 24 * 3600 * 1000;
@@ -181,6 +187,25 @@ export function parseScoutReply(text: string, window: { since: string; until: st
 
 function shiftDate(day: string, days: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY).toISOString().slice(0, 10);
+}
+
+/** At most `max` candidates per main entity (the first ones, i.e. the most important); untagged ones always pass. */
+export function capPerEntity<T extends { entities: string[] }>(candidates: T[], max = MAX_PER_ENTITY): { kept: T[]; capped: number } {
+  const count = new Map<string, number>();
+  const kept: T[] = [];
+  for (const c of candidates) {
+    const main = c.entities[0] ? normalizeName(c.entities[0]) : "";
+    const n = main ? (count.get(main) ?? 0) : 0;
+    if (main && n >= max) continue;
+    if (main) count.set(main, n + 1);
+    kept.push(c);
+  }
+  return { kept, capped: candidates.length - kept.length };
+}
+
+/** Whether a story is trending: several independent sources, or found again and again. */
+export function trending(e: Pick<PoolEntry, "sources" | "sightings">): boolean {
+  return e.sources.length >= TRENDING || e.sightings >= TRENDING;
 }
 
 // ── merging ──────────────────────────────────────────────────────────────────
@@ -364,12 +389,15 @@ export function decide(pool: PoolEntry[], s: ScoutSettings, lastIssueAt: string,
   const strong = live.filter((e) => e.score >= s.strong);
   const since = Date.parse(now) - Date.parse(lastIssueAt);
   const pick = (list: PoolEntry[]) => list.slice(0, maxItems).map((e) => e.id);
-  if (force) return { action: "issue", reason: "requested", ids: pick(live), strong: strong.length };
+  // Worth sending at all: at least FLOOR; when nothing reaches it, the best three anyway.
+  const worthy = live.filter((e) => e.score >= FLOOR);
+  const anyway = worthy.length ? worthy : live.slice(0, 3);
+  if (force) return { action: "issue", reason: "requested", ids: pick(anyway), strong: strong.length };
   if (strong.length >= s.sendAt && since >= s.minGapDays * DAY) {
-    return { action: "issue", reason: `${strong.length} strong stories (≥ ${s.sendAt})`, ids: pick(strong.length >= maxItems ? strong : live), strong: strong.length };
+    return { action: "issue", reason: `${strong.length} strong stories (≥ ${s.sendAt})`, ids: pick(worthy), strong: strong.length };
   }
   if (since >= s.maxGapDays * DAY) {
-    return { action: "issue-anyway", reason: `${s.maxGapDays} days since the last issue`, ids: pick(live), strong: strong.length };
+    return { action: "issue-anyway", reason: `${s.maxGapDays} days since the last issue`, ids: pick(anyway), strong: strong.length };
   }
   const dueBy = new Date(Date.parse(lastIssueAt) + s.maxGapDays * DAY).toISOString();
   const reason =

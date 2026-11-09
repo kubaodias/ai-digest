@@ -11,7 +11,7 @@ import { SECRET, loadConfig, secret } from "./config.ts";
 import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
 import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
-  canonicalUrl, decide, housekeep, mergeCandidates, parseScoutReply, rescore, scoutSettings, slotOf,
+  canonicalUrl, capPerEntity, decide, housekeep, mergeCandidates, parseScoutReply, rescore, scoutSettings, slotOf,
   type Candidate, type Decision, type PoolEntry, type Sighting,
 } from "./pool.ts";
 import { quietNote, scoutMessage, writerMessage } from "./scout-instructions.ts";
@@ -99,6 +99,14 @@ const DAY_MS = 24 * 3600 * 1000;
 const PASS_TIMEOUT_MS = 30 * 60 * 1000;
 /** After this long, a pass that hasn't delivered is checked: its reply is re-delivered, or the pass is given up. */
 const PASS_CHECK_MS = 5 * 60 * 1000;
+/**
+ * Timers are spread out so passes of different digests rarely run at the same
+ * time (the runtime has crashed under several parallel passes): the first pass
+ * starts 1–16 minutes after scouting is turned on, and every next one is due
+ * one interval later, give or take up to 10 minutes.
+ */
+const firstPassDelayS = () => 60 + Math.floor(Math.random() * 15 * 60);
+const nextPassDelayS = (hours: number) => Math.max(600, hours * 3600 + Math.floor((Math.random() * 2 - 1) * 600));
 
 /** A digest's definition, parsed; undefined when it isn't stored (or is invalid). */
 async function loadProfile(env: ManagedEnv, id: string): Promise<DigestProfile | undefined> {
@@ -286,10 +294,11 @@ export class AiDigest extends ManagedAgent {
   private async deliverScoutReply(reply: string, run: { digest: string; slot: string; since: string; until: string }) {
     const { candidates, dropped, seen } = parseScoutReply(reply, run);
     const tags = await tagItems(this.agentEnv.TELNYX as any, candidates.map((c) => ({ headline: c.headline, why: c.summary || c.why })));
-    const tagged: Candidate[] = candidates.map((c, k) => ({ ...c, tags: tags[k]?.tags ?? [], entities: tags[k]?.entities ?? [] }));
-    console.log(JSON.stringify({ scout: "pass done", digest: run.digest, slot: run.slot, candidates: tagged.length, seen: seen.length, dropped }));
+    // Variety: at most two candidates about the same product per pass.
+    const { kept: tagged, capped } = capPerEntity<Candidate>(candidates.map((c, k) => ({ ...c, tags: tags[k]?.tags ?? [], entities: tags[k]?.entities ?? [] })));
+    console.log(JSON.stringify({ scout: "pass done", digest: run.digest, slot: run.slot, candidates: tagged.length, seen: seen.length, dropped, capped }));
     // Delivered by a durable task: retried with backoff until the pool takes it (a hung or failed call can't lose a pass).
-    await (this as any).schedule(0, "deliverToPool", { digest: run.digest, slot: run.slot, candidates: tagged, seen, dropped }, { id: "deliver", maxRetries: 8 });
+    await (this as any).schedule(0, "deliverToPool", { digest: run.digest, slot: run.slot, candidates: tagged, seen, dropped: dropped + capped }, { id: "deliver", maxRetries: 8 });
   }
 
   /**
@@ -348,21 +357,33 @@ export class AiDigest extends ManagedAgent {
     if (!s) {
       await (this as any).cancelSchedule("scout").catch(() => false);
       await (this as any).cancelSchedule("scout-first").catch(() => false);
-      if (meta.enabledAt) await (this as any).setState({ poolMeta: { enabledAt: null } });
+      if (meta.enabledAt) await (this as any).setState({ poolMeta: { enabledAt: null, scoutHours: null } });
       return { digest: id, scouting: false };
     }
-    await (this as any).every(s.scoutHours * 3600, "scoutTick", {}, { id: "scout" });
-    if (!meta.enabledAt) {
-      const now = new Date().toISOString();
-      await (this as any).setState({ poolMeta: { enabledAt: now, lastIssueAt: meta.lastIssueAt ?? now } });
-      await (this as any).schedule(60, "scoutTick", {}, { id: "scout-first" });
-    }
-    return { digest: id, scouting: true, everyHours: s.scoutHours };
+    // An armed timer with the same interval is left alone, so deploys (which store every
+    // definition again) don't line all digests' passes up; a missing one is re-armed.
+    const tasks: any[] = await (this as any).listSchedules().catch(() => []);
+    const armed = tasks.find((t) => t.id === "scout");
+    if (armed && !armed.everyMs && meta.scoutHours === s.scoutHours) return { digest: id, scouting: true, everyHours: s.scoutHours, kept: true };
+    const now = new Date().toISOString();
+    await (this as any).cancelSchedule("scout-first").catch(() => false);
+    await (this as any).setState({ poolMeta: { scoutHours: s.scoutHours, ...(meta.enabledAt ? {} : { enabledAt: now, lastIssueAt: meta.lastIssueAt ?? now }) } });
+    const delay = firstPassDelayS();
+    await (this as any).schedule(delay, "scoutTick", {}, { id: "scout" });
+    return { digest: id, scouting: true, everyHours: s.scoutHours, firstPassInMin: Math.round(delay / 60) };
   }
 
-  /** The timer's tick: one scout pass, unless one is still running. */
+  /** The timer's tick: one scout pass (unless one is still running), then the next tick, an interval later. */
   async scoutTick() {
     await this.startPass({}).catch((err: unknown) => console.log(JSON.stringify({ scout: "tick failed", error: err instanceof Error ? err.message : String(err) })));
+    // The next tick; if the definition can't be read right now, the last known interval keeps the chain going.
+    let hours: number | undefined;
+    try {
+      hours = scoutSettings(await digestsActor(this.agentEnv).getDigest(this.poolDigest()).then((d: any) => (d ? parseProfile(d.id, d.markdown) : undefined)))?.scoutHours;
+    } catch {
+      hours = (await this.poolState()).meta.scoutHours ?? undefined;
+    }
+    if (hours) await (this as any).schedule(nextPassDelayS(hours), "scoutTick", {}, { id: "scout" });
   }
 
   /**
