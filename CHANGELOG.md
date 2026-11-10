@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- Tests use a neutral example address (`kim.reader@example.com`).
 - The example Agent Memory digest describes its sources by kind (frameworks and services, new open-source projects, research, discussion), with names only as examples, and asks for projects it hasn't seen before, so newcomers aren't missed because the list didn't name them.
 
 ## [0.6.0] - 2026-11-09
