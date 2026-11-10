@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Checks and issues of different digests no longer run at the same time, which crashed the runtime (two checks started by hand within seconds of each other took both down, and the actors froze for about 10 minutes). They take turns through a lease held by the `digests` actor: a run that finds it taken waits and asks again within 1–2½ minutes, a check hands it to the issue it starts, and a run that crashes loses it after 10 minutes.
+
 ### Changed
 
 - Tests use a neutral example address (`kim.reader@example.com`).

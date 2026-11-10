@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  canonicalUrl, capPerEntity, trending, FLOOR, decide, entryId, housekeep, mergeCandidates, parseCheckReply, rescore, sameStory, scoreEntry, slotOf, titleOverlap,
+  canonicalUrl, capPerEntity, claimLease, leaseWaitS, releasesLease, LEASE_MS, trending, FLOOR, decide, entryId, housekeep, mergeCandidates, parseCheckReply, rescore, sameStory, scoreEntry, slotOf, titleOverlap,
   MAX_PER_CHECK, RESERVATION_MS, type Candidate, type PoolEntry, type WatchSettings,
 } from "../src/pool.ts";
 import { formatRange, quietNote, checkMessage, spendTool, storiesRange, toolBudget, writerMessage, CHECK_BUDGET, WRITER_CHECKS } from "../src/watch-instructions.ts";
@@ -337,4 +337,25 @@ test("date ranges read like a title", () => {
   assert.equal(formatRange("2026-11-08", "2026-11-08"), "November 8, 2026");
   assert.equal(storiesRange([{ published: "2026-11-06", firstSeen: NOW }, { firstSeen: "2026-11-04T10:00:00Z" }]), "November 4–6, 2026");
   assert.equal(storiesRange([]), undefined);
+});
+
+test("one run at a time: a lease taken, refused while held, handed over, released, and expired", () => {
+  const t = 1_000_000;
+  const a = claimLease(null, "ai-swe--check-1", t);
+  assert.ok(a.ok);
+  const lease = a.ok ? a.lease : null;
+  const b = claimLease(lease, "agent-memory--check-2", t + 30_000);
+  assert.equal(b.ok, false);
+  if (!b.ok) {
+    assert.equal(b.holder, "ai-swe--check-1");
+    assert.equal(b.retryInS, (LEASE_MS - 30_000) / 1000);
+  }
+  assert.ok(claimLease(lease, "ai-swe--check-1", t + 1).ok, "its holder may claim again (a task delivered twice)");
+  assert.ok(claimLease(lease, "ai-swe--issue-1", t + 60_000, "ai-swe--check-1").ok, "a check hands its lease to the issue it starts");
+  assert.equal(claimLease(lease, "ai-swe--issue-1", t + 60_000, "other--check-9").ok, false, "only from its holder");
+  assert.ok(claimLease(lease, "agent-memory--check-2", t + LEASE_MS).ok, "a crashed run's lease expires");
+  assert.equal(releasesLease(lease, "agent-memory--check-2"), false, "only the holder releases");
+  assert.equal(releasesLease(lease, "ai-swe--check-1"), true);
+  assert.equal(leaseWaitS(500, 0), 90, "waits at most 90 s before asking again");
+  assert.equal(leaseWaitS(20, 0.99), 20 + 59, "plus up to a minute of jitter");
 });
