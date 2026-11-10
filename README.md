@@ -43,7 +43,9 @@ Memory systems for AI agents, for an engineer building agents: long-term memory
 APIs and services, memory architectures, retrieval and context management.
 
 ## Sources
-- Letta, Mem0, Zep, LangGraph, Telnyx Agent Memory; arXiv cs.AI and cs.CL.
+- Memory frameworks and services, established and new (e.g. Letta, Mem0, Zep,
+  Hindsight, Telnyx Agent Memory); look for projects you haven't seen before too.
+- New open-source projects (GitHub, Show HN); arXiv cs.AI and cs.CL.
 
 ## Leave out
 - Chatbot launches with no memory angle.
