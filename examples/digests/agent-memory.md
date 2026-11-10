@@ -8,9 +8,10 @@ Memory systems for AI agents, for an engineer building agents: long-term memory 
 
 ## Sources
 
-- Letta, Mem0, Zep, LangChain and LangGraph, LlamaIndex, Telnyx Agent Memory and other provider docs and changelogs.
-- arXiv cs.AI and cs.CL, Hugging Face Papers.
-- Hacker News and r/LocalLLaMA discussions.
+- Memory frameworks, services and databases for agents, established and new (e.g. Letta, Mem0, Zep, Hindsight, LangGraph, LlamaIndex, Telnyx Agent Memory): their blogs, changelogs and releases. Look for projects you haven't seen before too.
+- New open-source memory projects: GitHub, Show HN, launch posts.
+- Research: arXiv cs.AI and cs.CL, Hugging Face Papers, lab blogs.
+- Discussion: Hacker News, r/LocalLLaMA, r/AI_Agents.
 
 ## Leave out
 
