@@ -11,8 +11,8 @@ import { SECRET, loadConfig, secret } from "./config.ts";
 import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
 import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
-  canonicalUrl, capPerEntity, decide, housekeep, mergeCandidates, parseCheckReply, rescore, watchSettings, slotOf,
-  type Candidate, type Decision, type PoolEntry, type Sighting,
+  canonicalUrl, capPerEntity, claimLease, decide, housekeep, leaseWaitS, mergeCandidates, parseCheckReply, releasesLease, rescore, watchSettings, slotOf,
+  type Candidate, type Decision, type PoolEntry, type RunLease, type Sighting,
 } from "./pool.ts";
 import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
 import {
@@ -486,6 +486,16 @@ export class AiDigest extends ManagedAgent {
     const profile = await loadProfile(this.agentEnv, id);
     if (!profile) return;
     const conversation = `${id}--check-${p.slot}`;
+    // One check or issue at a time across all digests (the runtime has crashed under parallel runs).
+    const lease = await digestsActor(this.agentEnv).claimRun(conversation);
+    if (!lease.ok) {
+      const wait = leaseWaitS(lease.retryInS);
+      // Still due, just waiting: keep the check from counting as stale meanwhile.
+      await (this as any).setState({ poolMeta: { checkRunning: { startedAt: new Date().toISOString() } } });
+      await (this as any).schedule(wait, "runCheck", p, { id: `check-${p.slot}-wait-${Date.now()}` });
+      console.log(JSON.stringify({ watch: "waiting", digest: id, slot: p.slot, holder: lease.holder, retryInS: wait }));
+      return;
+    }
     const run = (this.agentEnv as any).AI_DIGEST.idFromName(conversation);
     await run.prepareCheckRun({ digest: id, slot: p.slot, since: p.since, until: p.until });
     await run.receive(checkMessage(profile, { since: p.since, until: p.until, known: p.known }));
@@ -514,7 +524,10 @@ export class AiDigest extends ManagedAgent {
       ...(decision ? { lastDecision: { ...decision, at: now } } : {}),
     });
     console.log(JSON.stringify({ pool: "merged", digest: id, ...check, live: pool.filter((e) => e.state === "candidate").length, decision: decision?.action ?? "skipped", reason: decision?.reason }));
-    if (decision && decision.action !== "none" && profile) await this.startIssue(id, profile, pool, decision, meta, run?.force?.focus);
+    const checkOwner = `${id}--check-${p.slot}`;
+    if (decision && decision.action !== "none" && profile) await this.startIssue(id, profile, pool, decision, meta, run?.force?.focus, checkOwner);
+    // A no-op when the issue took the lease over.
+    await digestsActor(this.agentEnv).releaseRun(checkOwner).catch(() => undefined);
     return { added: merged.added, merged: merged.merged, decision: decision?.action ?? "skipped" };
   }
 
@@ -551,9 +564,19 @@ export class AiDigest extends ManagedAgent {
   }
 
   /** Reserve the chosen stories and start the writer run (or email the quiet note when there are none). */
-  private async startIssue(id: string, profile: DigestProfile, pool: PoolEntry[], d: Decision, meta: any, focus?: string) {
+  private async startIssue(id: string, profile: DigestProfile, pool: PoolEntry[], d: Decision, meta: any, focus?: string, fromCheck?: string) {
     const now = new Date().toISOString();
     const ids = d.action === "none" ? [] : d.ids;
+    if (ids.length) {
+      // One check or issue at a time across all digests: take over the check's lease, or wait for another digest's run.
+      const lease = await digestsActor(this.agentEnv).claimRun(`${id}--issue-${slotOf(now)}`, fromCheck);
+      if (!lease.ok) {
+        const wait = leaseWaitS(lease.retryInS);
+        await (this as any).schedule(wait, "runWriteNow", { focus }, { id: `write-wait-${Date.now()}` });
+        console.log(JSON.stringify({ pool: "issue waiting", digest: id, holder: lease.holder, retryInS: wait }));
+        return { conversation: null, stories: 0, waiting: true };
+      }
+    }
     if (!ids.length) {
       const note = quietNote(profile, meta.lastIssueAt ?? meta.enabledAt ?? now, now);
       const r = await sendDigestEmail(this.agentEnv, { ...note, profileId: id, profile });
@@ -593,6 +616,7 @@ export class AiDigest extends ManagedAgent {
     });
     await this.savePool(entries, after, { lastIssueAt: now, issueRunning: null, lastIssue: { slot: p.slot, at: now, stories: sent } });
     console.log(JSON.stringify({ pool: "issue sent", digest: this.poolDigest(), slot: p.slot, sent }));
+    await digestsActor(this.agentEnv).releaseRun(`${this.poolDigest()}--issue-${p.slot}`).catch(() => undefined);
     return { sent };
   }
 
@@ -891,6 +915,20 @@ export class AiDigest extends ManagedAgent {
   }
 
   /** Sign-in links: at most one a minute. Called in-process by the page. */
+  /** The run lease (one check or issue at a time across digests; pool.ts). Called in-process by pool actors. */
+  async claimRun(owner: string, from?: string) {
+    const state: any = await (this as any).getState();
+    const r = claimLease(state?.runLease as RunLease | undefined, owner, Date.now(), from);
+    if (r.ok) await (this as any).setState({ runLease: r.lease });
+    return r.ok ? { ok: true as const } : r;
+  }
+
+  async releaseRun(owner: string) {
+    const state: any = await (this as any).getState();
+    if (releasesLease(state?.runLease, owner)) await (this as any).setState({ runLease: null });
+    return { released: releasesLease(state?.runLease, owner) };
+  }
+
   async magicRequested(now: number) {
     const state: any = await (this as any).getState();
     const last = state?.magicRequestedAt ?? 0;

@@ -27,7 +27,7 @@ import { GENERAL_TEMPLATE } from "./general.ts";
 import { app } from "./app.ts";
 import { parseRecipients } from "./config.ts";
 
-export const VERSION = "0.6.0";
+export const VERSION = "0.6.1";
 export const FEEDBACK_ACTOR = "feedback";
 export const DIGESTS_ACTOR = "digests";
 

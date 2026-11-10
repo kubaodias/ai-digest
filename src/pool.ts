@@ -417,3 +417,39 @@ export function slotOf(iso: string): string {
 export function watchSettings(p: DigestProfile | undefined): WatchSettings | undefined {
   return p?.watch ? { ...p.watch } : undefined;
 }
+
+// ── one run at a time ────────────────────────────────────────────────────────
+
+/**
+ * Who may run a check or write an issue right now, across all digests. The
+ * runtime has crashed when several of these ran at once, so they take turns:
+ * the lease is held by one run (its conversation name) until it releases it or
+ * it expires (a run that crashed never releases).
+ */
+export interface RunLease {
+  owner: string;
+  until: number;
+}
+
+/** How long a lease lasts without a release: longer than a check or an issue takes. */
+export const LEASE_MS = 10 * 60 * 1000;
+
+/**
+ * Take the lease for `owner`, or say who holds it and when to try again.
+ * `from` hands it over: a check whose decision starts an issue passes its lease on.
+ */
+export function claimLease(lease: RunLease | null | undefined, owner: string, now: number, from?: string, ttl = LEASE_MS): { ok: true; lease: RunLease } | { ok: false; holder: string; retryInS: number } {
+  const free = !lease || lease.until <= now || lease.owner === owner || (from !== undefined && lease.owner === from);
+  if (!free) return { ok: false, holder: lease!.owner, retryInS: Math.max(1, Math.ceil((lease!.until - now) / 1000)) };
+  return { ok: true, lease: { owner, until: now + ttl } };
+}
+
+/** Whether `owner` releasing the lease clears it (only its holder can). */
+export function releasesLease(lease: RunLease | null | undefined, owner: string): boolean {
+  return !!lease && lease.owner === owner;
+}
+
+/** How long to wait before asking again: up to 90 s, plus up to a minute of jitter so waiting runs don't all retry at once. */
+export function leaseWaitS(retryInS: number, random = Math.random()): number {
+  return Math.min(retryInS, 90) + Math.floor(random * 60);
+}
