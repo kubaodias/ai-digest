@@ -62,7 +62,7 @@ test("cookies and masking", () => {
   assert.deepEqual(parseCookies("a=1; aid_session=x%2Ey; b=2"), { a: "1", aid_session: "x.y", b: "2" });
   assert.deepEqual(parseCookies(null), {});
   assert.equal(maskEmail("kuba@example.com"), "k*****a@example.com");
-  assert.equal(maskEmail("kodeo.it.reader@example.com"), "k*****r@example.com", "the length stays hidden");
+  assert.equal(maskEmail("kim.reader@example.com"), "k*****r@example.com", "the length stays hidden");
   assert.equal(maskEmail("k@example.com"), "k*****@example.com");
   assert.equal(maskEmail("no-at-sign"), "your address");
 });
