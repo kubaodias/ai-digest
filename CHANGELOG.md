@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-13
+
 ### Fixed
 
 - Editorial illustrations no longer illustrate items. A cartoon of a hand with a Goldman Sachs cufflink unplugging a device labelled "Claude Code" passed as a picture of the subject, because it showed the product's name. Pictures credited as illustrations, photo illustrations or cartoons are no longer candidates; the vision model scores commissioned art as decorative and can call it an `illustration`; and illustrations, stock photos and logos are never shown, whatever their score.
