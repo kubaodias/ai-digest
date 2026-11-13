@@ -87,13 +87,13 @@ For each item, `src/images.ts`:
    - other figures and images;
    - the `og:image` share image last, since it's usually a branded banner.
 
-   Logos, icons, avatars, "card image" teasers and tracking pixels are skipped. Up to 6 candidates.
+   Logos, icons, avatars, "card image" teasers and tracking pixels are skipped, and so is commissioned art: a picture credited as "Illustration: …", "Illustration by …", "Photo illustration …" or "Cartoon by …". Up to 6 candidates.
 3. **Fixes URLs:**
    - SVG diagrams are converted to PNG when the host can render one; Contentful's image API does it with `fm=png`, e.g. OpenAI's diagrams. Other SVGs are dropped, because Gmail doesn't render SVG.
    - GitHub's signed `private-user-images` links expire in 5 minutes, so they're rewritten to the permanent `github.com/user-attachments/assets/<id>`. Other signed, expiring links are dropped.
 4. **Checks the shape from the image header:** at least 500 px wide, and not taller than wide.
-5. **Asks Qwen3.8** to score each one 0–10 for how much it helps an engineer understand *this* item: charts, diagrams and screenshots score high; stock, logos and banners score low. Qwen reasons by default and can spend the whole token budget before answering, so the request sets `reasoning_effort: "none"`; it then answers in about a second.
-6. **Keeps up to 2 pictures scoring 7 or more**, with a short caption: the page's own caption, or the model's one-sentence description.
+5. **Asks Qwen3.8** to score each one 0–10 for how much it helps an engineer understand *this* item: charts, diagrams and screenshots score high; editorial illustrations and cartoons (even ones showing the product's name), stock, logos and banners score low. Qwen reasons by default and can spend the whole token budget before answering, so the request sets `reasoning_effort: "none"`; it then answers in about a second.
+6. **Keeps up to 2 pictures scoring 7 or more**, never ones the model calls an illustration, stock photo or logo, with a short caption: the page's own caption, or the model's one sentence on what the picture tells the reader (its numbers, structure or interface), not what it looks like.
 
 The whole step has a 75-second budget. Items whose articles fail, or have nothing relevant, simply get no picture.
 

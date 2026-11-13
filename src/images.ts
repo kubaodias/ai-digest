@@ -141,6 +141,13 @@ export function rasterUrl(url: string): string | undefined {
 /** Alt text of a teaser or chrome image rather than an illustration of the article. */
 const SKIP_ALT = /(card image|thumbnail|related|avatar|logo|icon|headshot|portrait of|profile photo)/i;
 
+/**
+ * A credit line of commissioned art ("Illustration: Name", "Illustration by …",
+ * "Photo illustration …", "Cartoon by …"): it decorates the story and shows
+ * nothing of it. "Illustration of the pipeline" (a diagram) doesn't match.
+ */
+const ART_CREDIT = /\b(photo[- ]illustration\b|(illustration|illustrated|cartoon|artwork|animation)\s*(by\b|:))/i;
+
 /** The article body: the largest <article>, else <main>, else the page. */
 function articleBody(html: string): string {
   const arts = [...html.matchAll(/<article\b[\s\S]*?<\/article>/gi)].map((m) => m[0]).sort((a, b) => b.length - a.length);
@@ -174,6 +181,7 @@ export function extractCandidates(html: string, pageUrl: string): Candidate[] {
 
   const body = articleBody(html);
   const figures: Candidate[] = [];
+  const art = new Set<string | undefined>(); // figures skipped as commissioned art, so the <img> pass doesn't add them back
   for (const m of body.matchAll(/<figure\b[\s\S]*?<\/figure>/gi)) {
     const fig = m[0];
     const img = fig.match(/<img\b[^>]*>/i)?.[0];
@@ -181,15 +189,19 @@ export function extractCandidates(html: string, pageUrl: string): Candidate[] {
     const alt = attr(img, "alt");
     if (alt && SKIP_ALT.test(alt)) continue;
     const cap = fig.match(/<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/i)?.[1] ?? fig.match(/aria-label="([^"]+)"/i)?.[1];
+    if ((alt && ART_CREDIT.test(alt)) || (cap && ART_CREDIT.test(strip(cap)))) {
+      art.add(imgUrl(img));
+      continue;
+    }
     const c = make(imgUrl(img), { origin: "figure", alt, caption: cap ? strip(cap).slice(0, 300) : undefined });
     if (c) figures.push(c);
   }
   const imgs: Candidate[] = [];
   for (const m of body.matchAll(/<img\b[^>]*>/gi)) {
     const img = m[0];
-    if (tooSmall(img)) continue;
+    if (tooSmall(img) || art.has(imgUrl(img))) continue;
     const alt = attr(img, "alt");
-    if (alt !== undefined && (SKIP.test(alt) || SKIP_ALT.test(alt))) continue;
+    if (alt !== undefined && (SKIP.test(alt) || SKIP_ALT.test(alt) || ART_CREDIT.test(alt))) continue;
     const c = make(imgUrl(img), { origin: "img", alt });
     if (c) imgs.push(c);
   }
@@ -292,9 +304,11 @@ Image caption on the page: ${c.caption || "(none)"}
 Look at the image. Score 0–10 how much it helps this reader understand THIS item:
 - 8–10: shows the actual subject: a benchmark chart or table, an architecture diagram, a product/UI/terminal screenshot, a code snippet, a photo of the specific device or event.
 - 4–7: related but generic (a lab's branded banner with the model name, a conference stage photo).
-- 0–3: decorative or irrelevant: stock photo, abstract art, logo only, author headshot, ad, cookie banner, mostly text of a headline.
+- 0–3: decorative or irrelevant: an editorial illustration, cartoon or conceptual artwork (even when it shows the product's or company's name), stock photo, abstract art, logo only, author headshot, ad, cookie banner, mostly text of a headline.
 
-Answer with JSON only, no prose: {"score": <0-10>, "kind": "<chart|diagram|screenshot|photo|banner|logo|stock|other>", "caption": "<one factual sentence describing what the image shows, max 20 words>"}`;
+The caption tells the reader what the image shows about the item: the numbers, structure or interface in it, e.g. "SWE-bench Verified: Model A at 81%, ahead of Model B at 74%" or "The new review panel lists findings per file". Don't describe its look ("a bar chart with blue bars", "a hand unplugs a device").
+
+Answer with JSON only, no prose: {"score": <0-10>, "kind": "<chart|diagram|screenshot|photo|banner|logo|stock|illustration|other>", "caption": "<one sentence, max 20 words>"}`;
 
 async function judge(telnyx: TelnyxPoster, dataUrl: string, headline: string, context: string, c: Candidate, audience: string): Promise<{ score: number; kind: string; caption: string }> {
   const call = telnyx.post("/ai/chat/completions", {
@@ -313,6 +327,14 @@ async function judge(telnyx: TelnyxPoster, dataUrl: string, headline: string, co
   if (!json) throw new Error(`vision answered without JSON: ${text.slice(0, 80)}`);
   const v = JSON.parse(json);
   return { score: Number(v.score) || 0, kind: String(v.kind ?? "other"), caption: shorten(String(v.caption ?? "").trim()) };
+}
+
+/** Kinds never shown, whatever their score: they decorate rather than inform. */
+const DECORATIVE = new Set(["illustration", "stock", "logo"]);
+
+/** A judged image worth showing: scored high enough, captioned, and not decorative. */
+export function usable(v: { score: number; kind: string; caption?: string }): boolean {
+  return v.score >= MIN_SCORE && !!v.caption && !DECORATIVE.has(v.kind);
 }
 
 /** Up to MAX_IMAGES_PER_ITEM images from one article that the vision model judged relevant. */
@@ -342,7 +364,7 @@ export async function pickImages(telnyx: TelnyxPoster, article: string, headline
       }
     }),
   );
-  const good = judged.filter((j): j is PickedImage & { shape?: string; og?: boolean } => !!j && j.score >= MIN_SCORE && !!j.caption).sort((a, b) => b.score - a.score);
+  const good = judged.filter((j): j is PickedImage & { shape?: string; og?: boolean } => !!j && usable(j)).sort((a, b) => b.score - a.score);
   return distinctPicks(good).slice(0, MAX_IMAGES_PER_ITEM).map(({ shape, og, ...im }) => im);
 }
 
