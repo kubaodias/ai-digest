@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { digestSections, dimensions, distinctImages, distinctPicks, extractCandidates, imageKey, rasterUrl, stableUrl } from "../src/images.ts";
+import { digestSections, dimensions, distinctImages, distinctPicks, extractCandidates, imageKey, rasterUrl, stableUrl, usable } from "../src/images.ts";
 
 test("imageKey: one picture at any size is one key; different pictures stay apart", () => {
   const base = "https://static.example.com/story-media/123/HWbLl";
@@ -88,4 +88,24 @@ test("distinctPicks: the share image only when there's nothing else; one shape p
   const twin = { url: "https://static.example.com/m/123/HWbLl-small.jpg", shape: "1.78" };
   const other = { url: "https://static.example.com/m/123/diagram.png", shape: "1.33" };
   assert.deepEqual(distinctPicks([fig, twin, other]).map((p) => p.url), [fig.url, other.url]);
+});
+
+test("commissioned art is not a candidate: illustration and cartoon credits are skipped, diagrams 'illustrating' something are kept", () => {
+  const big = (src: string, alt: string) => `<img src="${src}" alt="${alt}" width="1200" height="675">`;
+  const html = `<html><body><article>${"x".repeat(2100)}
+    <figure>${big("https://cdn.example.com/art.jpg", "A hand unplugs a device labeled Claude Code")}<figcaption>Illustration: Kim Reader / Example News</figcaption></figure>
+    <figure>${big("https://cdn.example.com/cartoon.jpg", "Cartoon by Kim Reader")}</figure>
+    <figure>${big("https://cdn.example.com/photo-ill.jpg", "")}<figcaption>Photo illustration by Example News</figcaption></figure>
+    <figure>${big("https://cdn.example.com/pipeline.png", "Illustration of the review pipeline: planner, reviewers, verifier")}</figure>
+    ${big("https://cdn.example.com/inline-art.jpg", "Illustration by Kim Reader")}
+  </article></body></html>`;
+  assert.deepEqual(extractCandidates(html, "https://news.example.com/story").map((c) => c.url), ["https://cdn.example.com/pipeline.png"]);
+});
+
+test("usable: high-scoring charts and screenshots pass; illustrations, stock and logos never do", () => {
+  assert.equal(usable({ score: 9, kind: "chart", caption: "SWE-bench Verified: A at 81%" }), true);
+  assert.equal(usable({ score: 8, kind: "illustration", caption: "A hand unplugs a device" }), false);
+  assert.equal(usable({ score: 8, kind: "stock", caption: "People at desks" }), false);
+  assert.equal(usable({ score: 6, kind: "screenshot", caption: "The review panel" }), false);
+  assert.equal(usable({ score: 9, kind: "screenshot", caption: "" }), false);
 });
