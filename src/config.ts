@@ -21,6 +21,8 @@ export const SECRET = {
   feedbackKey: "FEEDBACK_KEY",
   authKey: "AGENT_AUTH_KEY",
   adminEmail: "ADMIN_EMAIL",
+  /** The voice assistant's id (set by `ai-digest deploy`); talk links are added only when it's set. */
+  talkAssistant: "TALK_ASSISTANT_ID",
 } as const;
 
 export async function secret(env: ManagedEnv, name: string): Promise<string | undefined> {

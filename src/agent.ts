@@ -5,7 +5,7 @@ import { z } from "zod";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { addImages } from "./images.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
-import { DOWN_REASONS, UP_REASONS, sharedEntityPrefs } from "./preferences.ts";
+import { DOWN_REASONS, UP_REASONS, sharedEntityPrefs, validReason } from "./preferences.ts";
 import { digestFromReply } from "./digest.ts";
 import { SECRET, loadConfig, secret } from "./config.ts";
 import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
@@ -15,6 +15,7 @@ import {
   type Candidate, type Decision, type PoolEntry, type RunLease, type Sighting,
 } from "./pool.ts";
 import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
+import { addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
 import {
   FEEDBACK_CONVERSATION, KEEP_DIGESTS, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
@@ -215,9 +216,17 @@ async function sendDigestEmail(
   }
   try {
     // The API wants `to` as an array and the bodies as text_body / html_body (unknown fields are silently dropped).
-    const html = renderEmailHtml(htmlMarkdown, subject);
+    let html = renderEmailHtml(htmlMarkdown, subject);
+    let text = markdown;
+    // "Talk about this issue" and a "Discuss" link per story, once the voice assistant is deployed.
+    const key = record && (await secret(env, SECRET.talkAssistant)) ? await feedbackKey(env) : undefined;
+    if (key && record) {
+      const links = await talkLinks(key, talkBase(config.publicUrl), digestId, record.items);
+      html = addTalkLinks(html, links);
+      text = addTalkLinkText(text, links.issue);
+    }
     const res: any = await telnyx.post("/emails", {
-      body: { from: config.emailFrom, to, subject, text_body: markdown, html_body: html },
+      body: { from: config.emailFrom, to, subject, text_body: text, html_body: html },
     });
     const data = res?.data ?? res;
     // The feedback actor keeps the digest so a click can show the article and the digest it came from.
@@ -819,6 +828,72 @@ export class AiDigest extends ManagedAgent {
     const drop = older.sort((a, b) => b.sentAt.localeCompare(a.sentAt)).slice(KEEP_DIGESTS - 1).map((d) => d.id);
     await (this as any).setState({ digests: { [record.id]: record, ...Object.fromEntries(drop.map((d) => [d, null])) } });
     return { stored: record.id, dropped: drop.length };
+  }
+
+  /** A stored issue, for talking about it. Called in-process by the router; not @rpc. */
+  async issueRecord(id: string): Promise<DigestRecord | undefined> {
+    const state: any = await (this as any).getState();
+    return state?.digests?.[id] ?? undefined;
+  }
+
+  /** Replace a stored issue's email HTML (after adding talk links to it). Called in-process; not @rpc. */
+  async setIssueHtml(id: string, html: string) {
+    const state: any = await (this as any).getState();
+    const d: DigestRecord | undefined = state?.digests?.[id];
+    if (!d) return { ok: false };
+    await (this as any).setState({ digests: { [id]: { ...d, html } } });
+    return { ok: true };
+  }
+
+  /**
+   * A vote from the talk page: by voice (the assistant's record_vote) or a 👍/👎 or reason tapped
+   * on the page. Recorded like a thumbs click on the item, into the same log and Agent Memory
+   * profile. A reason (r, and x for "entity") toggles on the current vote; undo removes the vote.
+   * Called in-process by the router; not @rpc.
+   */
+  async talkVote(p: { d: string; i: number; v: "up" | "down"; r?: string; x?: number; undo?: boolean; via?: string }) {
+    const state: any = await (this as any).getState();
+    const digest: DigestRecord | undefined = state?.digests?.[p.d];
+    const item = digest?.items.find((i) => i.n === p.i);
+    if (!digest || !item) return { ok: false, error: "no such story in this issue" };
+    const id = `${p.d}:${p.i}`;
+    const prior: StoredVote | undefined = state?.votes?.[id];
+    const profile = digest.profile ?? prior?.profile ?? LEGACY_PROFILE;
+    const telnyx = this.agentEnv.TELNYX as any;
+    if (p.undo) {
+      if (prior) {
+        await forgetVote(telnyx, profile, prior.memorySource).catch(() => undefined);
+        await (this as any).setState({ votes: { [id]: null } });
+        if (prior.memorySource) await this.later(120, "forgetMemorySourceLater", { source: prior.memorySource, profile });
+      }
+      console.log(JSON.stringify({ feedback: "undo", via: p.via ?? "talk", id }));
+      return { ok: true, story: p.i, vote: null, reasons: [] };
+    }
+    const reason = p.r && validReason(p.v, p.r) ? (p.r as any) : undefined;
+    const x = reason === "entity" && Number.isInteger(p.x) && p.x! >= 0 && p.x! <= 2 ? p.x : undefined;
+    // A reason applies to a vote of the same kind: cast the vote first when there isn't one.
+    let base = prior;
+    if (reason && (!prior || prior.vote !== p.v)) base = nextVote(prior, { d: p.d, i: p.i, v: p.v, e: 0 }, item, new Date().toISOString()).vote;
+    const { vote, changed } = nextVote(base, { d: p.d, i: p.i, v: p.v, e: 0, ...(reason ? { r: reason } : {}), ...(x !== undefined ? { x } : {}) }, item, new Date().toISOString());
+    vote.profile ??= profile;
+    if (digest.topic) vote.topic ??= digest.topic;
+    if (changed || base !== prior) {
+      vote.memorySource = await rememberVote(telnyx, profile, vote).catch((err: unknown) => {
+        console.log(JSON.stringify({ feedback: "memory write failed", error: String(err) }));
+        return prior?.memorySource;
+      });
+      await (this as any).setState({ votes: { [id]: vote } });
+    }
+    console.log(JSON.stringify({ feedback: "vote", via: p.via ?? "talk", id, vote: vote.vote, reasons: vote.reasons ?? [], changed }));
+    return { ok: true, story: p.i, vote: vote.vote, reasons: vote.reasons ?? [], headline: item.headline };
+  }
+
+  /** The votes on one issue's stories, for the talk page: item number → vote and reasons. Called in-process; not @rpc. */
+  async issueVotes(d: string) {
+    const state: any = await (this as any).getState();
+    const out: Record<number, { vote: string; reasons: { r: string; target?: string }[] }> = {};
+    for (const v of Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]) if (v.digest === d) out[v.item] = { vote: v.vote, reasons: (v.reasons ?? []) as any };
+    return out;
   }
 
   /** For the page: sent issues (newest first) and votes per digest. Called in-process; not @rpc. */

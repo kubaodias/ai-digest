@@ -5,7 +5,8 @@
 // (src/index.ts, the v1 API):
 //   1. checks .env and runs the tests
 //   2. registers the function on the first deploy (telnyx-edge new-func)
-//   3. stores the settings as Telnyx secrets (values in the request body, never on a command line)
+//   3. stores the settings as Telnyx secrets (values in the request body, never on a command line),
+//      and creates or updates the voice assistant for talking about issues (scripts/assistant.mjs)
 //   4. writes .edge/ (telnyx.toml + entry) and ships it
 //   5. records the public URL (and ships again on the first deploy, since emails need it)
 //   6. pushes your digest definitions from digests/
@@ -16,6 +17,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { agentApi, edgeDir, loadEnv, readState, root, run, say, setEnvValue, telnyx, writeState } from "./lib.mjs";
+import { ensureTalkAssistant } from "./assistant.mjs";
 
 const args = new Set(process.argv.slice(2));
 let env = loadEnv();
@@ -58,9 +60,16 @@ writeState(state);
 // 3. secrets
 say("Storing settings as Telnyx secrets");
 const existing = new Set((await telnyx(env, "GET", "/compute/secrets?page[size]=250")).data?.map((s) => s.secret_name) ?? []);
+// Secrets belong to the account and are matched by name, so another project's PUBLIC_URL would replace ours.
+// Ours carry the function's prefix (AI_DIGEST_PUBLIC_URL, …); the code reads them by binding name (PUBLIC_URL, …).
+const PREFIX = name.toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_";
+// The link-signing key can't be copied (secret values aren't readable): a deployment that only has the old
+// shared FEEDBACK_KEY keeps using it, so links in emails already sent keep working. Set FEEDBACK_KEY in .env to move it.
+const legacyFeedbackKey = !env.FEEDBACK_KEY && !existing.has(`${PREFIX}FEEDBACK_KEY`) && existing.has("FEEDBACK_KEY");
+const secretName = (binding) => (binding === "FEEDBACK_KEY" && legacyFeedbackKey ? "FEEDBACK_KEY" : PREFIX + binding);
 async function setSecret(key, value) {
-  await telnyx(env, "POST", "/compute/secrets", { secret_name: key, secret_value: value });
-  console.log(`  ✓ ${key}`);
+  await telnyx(env, "POST", "/compute/secrets", { secret_name: secretName(key), secret_value: value });
+  console.log(`  ✓ ${secretName(key)}`);
 }
 // The operator key: from .env, else the one telnyx-acp saved before 0.2.0, else a new one. Kept in .env for the scripts.
 if (!env.AGENT_AUTH_KEY) {
@@ -78,10 +87,18 @@ await setSecret("DIGEST_EMAIL_FROM", env.DIGEST_EMAIL_FROM);
 await setSecret("DIGEST_EMAIL_TO", env.DIGEST_EMAIL_TO);
 // The link-signing key: never rotated here (that would break links in emails already sent).
 if (env.FEEDBACK_KEY) await setSecret("FEEDBACK_KEY", env.FEEDBACK_KEY);
-else if (!existing.has("FEEDBACK_KEY")) await setSecret("FEEDBACK_KEY", randomBytes(32).toString("hex"));
+else if (!existing.has(secretName("FEEDBACK_KEY"))) await setSecret("FEEDBACK_KEY", randomBytes(32).toString("hex"));
 if (env.ADMIN_EMAIL) await setSecret("ADMIN_EMAIL", env.ADMIN_EMAIL);
 const knownUrl = env.PUBLIC_URL || state.publicUrl;
 if (knownUrl) await setSecret("PUBLIC_URL", knownUrl);
+// The voice assistant behind the "Talk about this issue" links (TALK=off in .env leaves it out).
+const talk = env.TALK !== "off";
+if (talk) {
+  say("Voice assistant for talking about issues");
+  const a = await ensureTalkAssistant(env);
+  console.log(`  ✓ ${a.created ? "created" : "updated"}`);
+  await setSecret("TALK_ASSISTANT_ID", a.id);
+}
 
 // 4. build and ship
 // A custom domain in PUBLIC_URL is declared in the manifest too (Telnyx custom domains).
@@ -93,7 +110,7 @@ const customHost = (() => {
     return undefined;
   }
 })();
-const SECRETS = ["AGENT_AUTH_KEY", "DIGEST_EMAIL_FROM", "DIGEST_EMAIL_TO", "FEEDBACK_KEY", "PUBLIC_URL", ...(env.ADMIN_EMAIL || existing.has("ADMIN_EMAIL") ? ["ADMIN_EMAIL"] : [])];
+const SECRETS = ["AGENT_AUTH_KEY", "DIGEST_EMAIL_FROM", "DIGEST_EMAIL_TO", "FEEDBACK_KEY", "PUBLIC_URL", ...(env.ADMIN_EMAIL || existing.has(secretName("ADMIN_EMAIL")) ? ["ADMIN_EMAIL"] : []), ...(talk ? ["TALK_ASSISTANT_ID"] : [])];
 function writeBuild() {
   mkdirSync(edgeDir, { recursive: true });
   writeFileSync(
@@ -114,7 +131,7 @@ function writeBuild() {
       ``,
       `[telnyx]`,
       `binding = "TELNYX"`,
-      ...SECRETS.flatMap((s) => [``, `[[secrets]]`, `binding = "${s}"`, `name = "${s}"`]),
+      ...SECRETS.flatMap((s) => [``, `[[secrets]]`, `binding = "${s}"`, `name = "${secretName(s)}"`]),
       ...(customHost ? [``, `[[domains]]`, `hostname = "${customHost}"`] : []),
       ``,
     ].join("\n"),

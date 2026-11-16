@@ -12,6 +12,7 @@
 | Delivery | Telnyx Email (`POST /v2/emails`) | `src/agent.ts` |
 | Feedback | The `feedback` actor: votes and sent issues | `src/feedback.ts`, `src/preferences.ts` |
 | Preference summary | Telnyx Agent Memory (namespace `ai-digest`, one profile per digest) | `docs/memory-summary-instructions.md` |
+| Talking about an issue | A Telnyx AI Assistant (`ai-digest-talk`) over WebRTC in the browser; article notes from Telnyx Web Search and Inference (`Qwen/Qwen3.8-27B`) | `src/talk.ts`, `src/talk-instructions.ts`, `scripts/assistant.mjs` |
 
 The agent class extends the managed agent loop from `@telnyx/acp` (harness, tools, durable state). The function has its own entry point: the router is the only HTTP surface, and actors are only called in-process.
 
@@ -23,6 +24,8 @@ The agent class extends the managed agent loop from `@telnyx/acp` (harness, tool
 | `GET /v1/assets/thumb-up.png`, `thumb-down.png` | anyone | Icons for emails and pages |
 | `GET /v1/feedback?p=…&s=…` | signed links | A thumbs click or reason: records the vote, shows the feedback page |
 | `GET /v1/feedback?view=…&s=…` | signed links | A sent issue's web view |
+| `GET /v1/talk?t=…` | signed links | The talk page for an issue (or one of its stories) |
+| `POST /v1/talk/tools/<name>` | signed token | The assistant's tools, called by the talk page: `{"t": token, "args": {…}}` for `read_article`, `search_web`, `record_vote` |
 | `GET /v1/digests` | operator token | Stored digests (id, title, window, items, `watch` settings, versions), then the built-in General one (`"builtIn": true`) |
 | `GET /v1/digests/<id>` | operator token | One definition (Markdown) |
 | `PUT /v1/digests/<id>` | operator token | Store a definition (body: Markdown); validated, the last 10 versions kept |
@@ -32,6 +35,8 @@ The agent class extends the managed agent loop from `@telnyx/acp` (harness, tool
 | `POST /v1/digests/<id>/check` | operator token | A check now: `{"since"?, "until"?, "decide"?: false}` → `202 {"conversation": …}` |
 | `POST /v1/runs` | operator token | A one-off General digest: `{"topic": "…", "window"?: "14d", "items"?: "5-8", "run"?: "name"}` → `202 {"conversation": "__general--…"}` |
 | `GET /v1/runs/<conversation>` | operator token | The conversation's recent runs: `{"runs": [{status, durationMs, toolCalls, tokens, …}]}` |
+| `GET /v1/issues` | operator token | Sent issues, newest first |
+| `POST /v1/issues/<id>/send` | operator token | Email a stored issue again (its stored HTML), adding talk links if it has none: `{"to"?: ["…"]}` |
 | `GET /v1/app`, `/v1/app/digests/<id>` | session cookie | The digests page (read-only) |
 | `GET`/`POST /v1/app/sign-in`, `GET /v1/app/auth?t=…`, `GET /v1/app/sign-out` | anyone | Magic-link sign-in: email a link (at most one a minute), use it (once, 15 minutes), sign out |
 | `GET /agents/ai-digest/feedback?…` | signed links | Same as `/v1/feedback`, for emails sent before 0.2.0 |
@@ -178,6 +183,20 @@ The memory service turns these into a profile summary. Two details matter:
 - **The summary's shape is set by namespace instructions** (`PATCH /v2/ai/memory/namespaces/ai-digest/settings`). [Ours](memory-summary-instructions.md) restricts it to *Wants more of / Wants less of / Patterns* and rules out identity, location and remarks about the data itself.
 
 The vote log is the source of truth. The memory summary is a softer, readable view of it.
+
+## Talking about an issue
+
+An email's "🎧 Talk about this issue" button, and the "🎧 Discuss" link next to each story's thumbs, open `/v1/talk?t=…`. The token is signed with `FEEDBACK_KEY`, names the issue (and the story, for a Discuss link) and expires after 30 days. It's tied to the issue, not to a person: anyone who got the email can talk.
+
+1. **The page** loads the stored issue and starts a WebRTC conversation with the `ai-digest-talk` assistant, using Telnyx's agent library (`@telnyx/ai-agent-lib`, from esm.sh). The assistant allows web calls without a Telnyx login (its id is public); what it can do with our data goes through the page's token.
+2. **The greeting** comes from the page: X-Greeting and X-Digest headers become the assistant's `{{greeting}}` and `{{digest}}`, e.g. "Agent Memory, Tuesday's issue: 7 stories. Say go and I'll read the headlines first, or ask me about any of them." A Discuss link names its story instead.
+3. **The tools are client-side**: the page answers them. `get_issue` returns the issue from the page (instant). `read_article`, `search_web` and `record_vote` call `POST /v1/talk/tools/<name>` with the token:
+   - `read_article` reads the story's article with Telnyx Web Search (`/web_search/contents`) and condenses it with `Qwen/Qwen3.8-27B` into notes of about 350 words, answering the listener's question first when there is one;
+   - `search_web` returns up to 6 results with excerpts;
+   - `record_vote` records an up or down vote like a thumbs click (same log, same Agent Memory profile).
+4. **The instructions** (`src/talk-instructions.ts`) keep it to what the tools returned, name stories by subject (never "item 3"), never read URLs, and keep turns short.
+
+`ai-digest deploy` creates or updates the assistant by name and stores its id as `TALK_ASSISTANT_ID`; emails get talk links only when it's set.
 
 ## What's stored where
 

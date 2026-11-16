@@ -5,6 +5,8 @@
 //   GET    /v1/health                     anyone           liveness and version
 //   GET    /v1/assets/<icon>.png          anyone           thumbs icons for emails and pages
 //   GET    /v1/feedback?p=…|view=…        signed links     thumbs, reasons, digest web view
+//   GET    /v1/talk?t=…                   signed links     talk about an issue with the voice assistant (src/talk.ts)
+//   POST   /v1/talk/tools/<name>          signed token     the assistant's tools, called by the talk page: {"t", "args"}
 //   GET    /v1/digests                    operator token   list digest definitions (and the built-in General one)
 //   GET    /v1/digests/<id>               operator token   one definition (Markdown)
 //   PUT    /v1/digests/<id>               operator token   store a definition (body: Markdown)
@@ -14,6 +16,8 @@
 //   POST   /v1/digests/<id>/check         operator token   a check now: {"since"?, "until"?, "decide"?}
 //   POST   /v1/runs                       operator token   a one-off General digest: {"topic", "window"?, "items"?, "run"?}
 //   GET    /v1/runs/<conversation>        operator token   the conversation's recent runs
+//   GET    /v1/issues                     operator token   sent issues, newest first
+//   POST   /v1/issues/<id>/send           operator token   email a stored issue again, with talk links: {"to"?: ["…"]}
 //
 //   GET    /v1/app[/…]                    session cookie   the digests page (src/app.ts; magic-link sign-in)
 //
@@ -26,6 +30,9 @@ import { GENERAL_ID, ID_PATTERN, ProfileError, generalProfile, parseProfile, run
 import { GENERAL_TEMPLATE } from "./general.ts";
 import { app } from "./app.ts";
 import { parseRecipients } from "./config.ts";
+import { TALK_TTL_S, addTalkLinks, readArticle, rebaseLinks, searchWeb, talkBase, talkLinks, talkToken, verifyTalkToken } from "./talk.ts";
+import { verifyPayload, verifyView } from "./feedback.ts";
+import { emailBody, talkPage } from "./talk-page.ts";
 
 export const VERSION = "0.6.2";
 export const FEEDBACK_ACTOR = "feedback";
@@ -113,6 +120,120 @@ function isoParam(v: unknown, name: string): string | undefined {
   return new Date(t).toISOString();
 }
 
+/** The talk page and its tools (signed by the link's token, not the operator token). */
+async function talkRoute(req: Request, env: RouterEnv, path: string, method: string): Promise<Response> {
+  const s = (n: string) => secret(env as any, n);
+  const [key, assistantId] = await Promise.all([s(SECRET.feedbackKey), s(SECRET.talkAssistant)]);
+  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_ACTOR);
+  if (!key || !assistantId) return json(503, { error: "not_configured", message: "the voice assistant isn't deployed (ai-digest deploy sets it up)" });
+  if (method === "GET" && path === "/v1/talk") {
+    const url = new URL(req.url);
+    const token = url.searchParams.get("t") ?? "";
+    const claim = await verifyTalkToken(key, token);
+    if (!claim) return talkError(400, "This link is invalid or has expired.");
+    const record = await feedback.issueRecord(claim.d);
+    if (!record) return talkError(404, "This issue is no longer stored.");
+    return issuePage(env, url.origin, key, assistantId, record, token, { start: claim.i, autostart: true });
+  }
+  const name = path.match(/^\/v1\/talk\/tools\/([a-z_]+)$/)?.[1];
+  if (method !== "POST" || !name) return json(404, { error: "not_found" });
+  const body = await req.json().catch(() => ({}));
+  const claim = await verifyTalkToken(key, typeof body?.t === "string" ? body.t : "");
+  if (!claim) return json(401, { error: "invalid_token" });
+  const args = body?.args && typeof body.args === "object" ? body.args : {};
+  const record = await feedback.issueRecord(claim.d);
+  if (!record) return json(404, { error: "issue_gone" });
+  const item = record.items.find((i: { n: number }) => i.n === Number(args.story));
+  const telnyx = env.TELNYX as any;
+  const started = Date.now();
+  try {
+    let out: unknown;
+    if (name === "read_article") out = item ? await readArticle(telnyx, item, typeof args.focus === "string" ? args.focus.slice(0, 300) : undefined) : { error: "no such story" };
+    else if (name === "search_web") out = typeof args.query === "string" && args.query.trim() ? await searchWeb(telnyx, args.query) : { error: "query is required" };
+    else if (name === "record_vote") out = item && (args.vote === "up" || args.vote === "down") ? await feedback.talkVote({ d: claim.d, i: item.n, v: args.vote, via: "voice" }) : { error: "story and vote (up or down) are required" };
+    // The page's own 👍/👎 and reasons (not one of the assistant's tools).
+    else if (name === "feedback") out = item && (args.vote === "up" || args.vote === "down") ? await feedback.talkVote({ d: claim.d, i: item.n, v: args.vote, r: typeof args.reason === "string" ? args.reason : undefined, x: typeof args.x === "number" ? args.x : undefined, undo: args.undo === true, via: "page" }) : { error: "story and vote (up or down) are required" };
+    else if (name === "log") {
+      const str = (v: unknown, n: number) => (typeof v === "string" ? v.slice(0, n) : v === null || v === undefined ? null : String(v).slice(0, n));
+      console.log(JSON.stringify({ talk: "client error", issue: claim.d, stage: str(args.stage, 20), error: str(args.error, 300), code: str(args.code, 20), fatal: args.fatal === true, ua: str(args.ua, 200) }));
+      return json(200, { ok: true });
+    }
+    else return json(404, { error: "unknown_tool" });
+    console.log(JSON.stringify({ talk: "tool", tool: name, issue: claim.d, story: item?.n ?? null, ms: Date.now() - started }));
+    return json(200, out);
+  } catch (err) {
+    console.log(JSON.stringify({ talk: "tool failed", tool: name, issue: claim.d, error: err instanceof Error ? err.message : String(err) }));
+    return json(200, { error: "the tool failed; say so and continue" });
+  }
+}
+
+/** The issue page for a plain thumbs click (the vote is recorded) or a view link; undefined to use the older pages. */
+async function issuePageFor(req: Request, env: RouterEnv): Promise<Response | undefined> {
+  const url = new URL(req.url);
+  const q = url.searchParams;
+  if (q.has("r") || q.has("undo") || q.has("x")) return undefined;
+  const s = (n: string) => secret(env as any, n);
+  const [key, assistantId] = await Promise.all([s(SECRET.feedbackKey), s(SECRET.talkAssistant)]);
+  if (!key || !assistantId) return undefined;
+  let d: string, voted: number | undefined, v: "up" | "down" | undefined;
+  if (q.has("view")) {
+    d = q.get("view") ?? "";
+    if (!(await verifyView(key, d, q.get("s") ?? ""))) return undefined;
+  } else {
+    const p = await verifyPayload(key, q.get("p") ?? "", q.get("s") ?? "");
+    if (!p || p.r) return undefined;
+    ({ d, i: voted, v } = { d: p.d, i: p.i, v: p.v });
+  }
+  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_ACTOR);
+  const record = await feedback.issueRecord(d);
+  if (!record) return undefined;
+  if (voted !== undefined && v) await feedback.talkVote({ d, i: voted, v, via: "email" });
+  const token = await talkToken(key, { d, e: Math.floor(Date.now() / 1000) + TALK_TTL_S });
+  return issuePage(env, url.origin, key, assistantId, record, token, { start: voted, autostart: false, voted });
+}
+
+/** The issue page: the issue as emailed, with talk links and the voice dock. */
+async function issuePage(env: RouterEnv, origin: string, key: string, assistantId: string, record: any, token: string, opts: { start?: number; autostart: boolean; voted?: number }): Promise<Response> {
+  let html = record.html ? rebaseLinks(record.html, origin) : undefined;
+  if (html) html = addTalkLinks(html, await talkLinks(key, `${origin}/v1/talk`, record.id, record.items));
+  const votes = await env.AI_DIGEST.idFromName(FEEDBACK_ACTOR).issueVotes(record.id).catch(() => ({}));
+  return talkPage({ token, assistantId, record, start: opts.start, body: emailBody(html), votes, autostart: opts.autostart, voted: opts.voted });
+}
+
+function talkError(status: number, message: string): Response {
+  return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Talk</title><body style="font:16px/1.5 system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px;"><p>${message}</p></body>`, {
+    status,
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" },
+  });
+}
+
+/** Email a stored issue again (its stored HTML), adding talk links when it has none. */
+async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<Response> {
+  const s = (n: string) => secret(env as any, n);
+  const [key, assistantId, from, defaultTo, publicUrl] = await Promise.all([s(SECRET.feedbackKey), s(SECRET.talkAssistant), s(SECRET.emailFrom), s(SECRET.emailTo), s(SECRET.publicUrl)]);
+  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_ACTOR);
+  const record = await feedback.issueRecord(id);
+  if (!record?.html) return json(404, { error: "not_found", message: `no stored issue "${id}" (GET /v1/issues lists them)` });
+  if (!env.TELNYX || !from || !publicUrl) return json(503, { error: "not_configured", message: "email isn't configured" });
+  let recipients = (to ?? []).filter((a) => parseRecipients(a).length);
+  if (!recipients.length && record.profile) {
+    const d = await env.AI_DIGEST.idFromName(DIGESTS_ACTOR).getDigest(record.profile).catch(() => undefined);
+    if (d) recipients = parseProfile(record.profile, d.markdown).to;
+  }
+  if (!recipients.length) recipients = parseRecipients(defaultTo);
+  if (!recipients.length) return json(400, { error: "no_recipients" });
+  let html = rebaseLinks(record.html, publicUrl);
+  if (key && assistantId) {
+    html = addTalkLinks(html, await talkLinks(key, talkBase(publicUrl), id, record.items));
+    if (html !== record.html) await feedback.setIssueHtml(id, html);
+  }
+  const text = `${record.subject}\n\nThis digest is best read as HTML.${html.includes("/v1/talk?t=") ? `\n\n🎧 Talk about this issue: ${html.match(/href="([^"]*\/v1\/talk\?t=[^"]*)"/)?.[1] ?? ""}` : ""}`;
+  const res: any = await env.TELNYX.post("/emails", { body: { from, to: recipients, subject: record.subject, text_body: text, html_body: html } });
+  const data = res?.data ?? res;
+  console.log(JSON.stringify({ issue: "resent", id, recipients: recipients.length, talk: html.includes("/v1/talk?t="), email: data?.id }));
+  return json(200, { issue: id, recipients: recipients.length, talkLinks: html.includes("/v1/talk?t="), email: data?.id ?? null, status: data?.status ?? null });
+}
+
 /** How the built-in General digest appears in GET /v1/digests. */
 function generalSummary() {
   const p = generalProfile("{topic}");
@@ -152,8 +273,17 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
   if (method === "GET" && path === "/v1/health") return json(200, { ok: true, service: "ai-digest", version: VERSION });
   if (method === "GET" && path === "/v1/assets/thumb-up.png") return png(THUMB_UP_PNG_BASE64);
   if (method === "GET" && path === "/v1/assets/thumb-down.png") return png(THUMB_DOWN_PNG_BASE64);
-  if (method === "GET" && (path === "/v1/feedback" || path === "/agents/ai-digest/feedback")) return actor(FEEDBACK_ACTOR).fetch(req);
+  if (method === "GET" && (path === "/v1/feedback" || path === "/agents/ai-digest/feedback")) {
+    // A thumbs click or "view" link from an email opens the issue page (with the voice dock) when the assistant is deployed;
+    // reasons, undo and changes from the older feedback page still go to the feedback actor.
+    const page = await issuePageFor(req, env).catch((err: unknown) => {
+      console.log(JSON.stringify({ feedback: "issue page failed", error: err instanceof Error ? err.message : String(err) }));
+      return undefined;
+    });
+    return page ?? actor(FEEDBACK_ACTOR).fetch(req);
+  }
   if (path === "/v1/app" || path.startsWith("/v1/app/")) return appRoute(req, env);
+  if (path === "/v1/talk" || path.startsWith("/v1/talk/")) return talkRoute(req, env, path, method);
 
   // Everything else needs the operator token.
   if (!path.startsWith("/v1/")) return json(404, { error: "not_found", message: "see /v1/health; the API lives under /v1" });
@@ -233,6 +363,14 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
         const accepted = await actor(conversation).receive(message);
         return json(202, { digest: id, conversation, run: accepted });
       }
+    }
+    if (parts[0] === "issues" && parts.length === 1 && method === "GET") {
+      const { issues } = await actor(FEEDBACK_ACTOR).appOverview();
+      return json(200, issues);
+    }
+    if (parts[0] === "issues" && parts[1] && parts[2] === "send" && parts.length === 3 && method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      return resendIssue(env, parts[1], Array.isArray(body?.to) ? body.to : undefined);
     }
     if (parts[0] === "runs" && parts.length === 1 && method === "POST") {
       const body = await req.json().catch(() => undefined);
