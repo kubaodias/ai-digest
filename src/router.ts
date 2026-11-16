@@ -230,7 +230,7 @@ async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<R
   // Recipients given are used as given: a mistyped one, or none at all, is an error, never a reason to
   // email the default audience. The defaults are only for a request that leaves `to` out.
   let recipients: string[];
-  if (to) {
+  if (to !== undefined) {
     const given = givenRecipients(to);
     if (!given.ok) return json(400, { error: "invalid_recipients", message: given.message });
     recipients = given.to;
@@ -399,8 +399,9 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
       if (raw.trim()) {
         try { body = JSON.parse(raw); } catch { return json(400, { error: "invalid_json" }); }
       }
+      // Only a request without `to` gets the defaults: null, "" or [] name no one and are refused.
       const to = body?.to;
-      return resendIssue(env, parts[1], to === undefined || to === null ? undefined : Array.isArray(to) ? to : [to]);
+      return resendIssue(env, parts[1], to === undefined ? undefined : Array.isArray(to) ? to : [to]);
     }
     if (parts[0] === "runs" && parts.length === 1 && method === "POST") {
       const body = await req.json().catch(() => undefined);

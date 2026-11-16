@@ -313,7 +313,7 @@ test("resending an issue: recipients given are used as given, a mistyped one is 
   const actor = env.AI_DIGEST.idFromName;
   (env as any).AI_DIGEST.idFromName = (name: string) => ({ ...actor(name), issueRecord: async (id: string) => ({ id, subject: "S", sentAt: "2026-11-16T00:00:00Z", items: [], html: "<p>x</p>" }) });
   const send = async (body: unknown) => route(req("/v1/issues/x/send", { method: "POST", headers: { ...(await auth()), "content-type": "application/json" }, body: JSON.stringify(body) }), env);
-  for (const body of [{ to: ["mistyped-address"] }, { to: ["me@example.com", "nope"] }, { to: [] }, { to: "nope" }, { to: ["me@example.com, mistyped-address"] }, { to: [" "] }, { to: [","] }, { to: ";" }, { to: [42] }]) {
+  for (const body of [{ to: ["mistyped-address"] }, { to: ["me@example.com", "nope"] }, { to: [] }, { to: "nope" }, { to: ["me@example.com, mistyped-address"] }, { to: [" "] }, { to: [","] }, { to: ";" }, { to: [42] }, { to: null }, { to: "" }]) {
     const r = await send(body);
     assert.equal(r.status, 400, JSON.stringify(body));
     assert.equal((await r.json()).error, "invalid_recipients");

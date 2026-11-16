@@ -167,7 +167,7 @@ export async function searchWeb(telnyx: TelnyxClient, query: string) {
     const excerpt = typeof r.description === "string" && r.description ? r.description : (Array.isArray(r.snippets) ? r.snippets.join(" ") : "");
     return { title: String(r.title ?? ""), source, excerpt: clip(excerpt, 500) };
   });
-  return results.length ? { results } : { results: [], note: "no results" };
+  return { results };
 }
 
 export { DEFAULT_GREETING };
