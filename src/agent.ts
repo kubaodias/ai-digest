@@ -17,8 +17,8 @@ import {
 import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
 import { TALK_TTL_S, addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
 import {
-  FEEDBACK_CONVERSATION, KEEP_DIGESTS, KEEP_ISSUES, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
-  nextVote, preferencesFrom, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
+  FEEDBACK_CONVERSATION, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
+  nextVote, preferencesFrom, retainIssues, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
 } from "./feedback.ts";
 
 // ai-digest: a research agent on Telnyx Edge Compute that writes email digests
@@ -832,20 +832,12 @@ export class AiDigest extends ManagedAgent {
    * their talk links are valid (TALK_TTL_S), so a link works for as long as it says, up to KEEP_ISSUES in all.
    * Called in-process when a digest is emailed; not @rpc, so not on the public mount.
    */
-  async registerDigest(record: DigestRecord, now = Date.now()) {
+  async registerDigest(record: DigestRecord) {
     const state: any = await (this as any).getState();
-    const older = (Object.values(state?.digests ?? {}).filter(Boolean) as DigestRecord[])
-      .filter((d) => d.id !== record.id)
-      .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
-    const changes: Record<string, DigestRecord | null> = { [record.id]: record };
-    let dropped = 0;
-    older.forEach((d, i) => {
-      const n = i + 1; // the new record is first
-      if (n >= KEEP_ISSUES || now - Date.parse(d.sentAt) > TALK_TTL_S * 1000) { changes[d.id] = null; dropped++; }
-      else if (n >= KEEP_DIGESTS && d.html) changes[d.id] = { ...d, html: "" };
-    });
-    await (this as any).setState({ digests: changes });
-    return { stored: record.id, dropped };
+    const older = (Object.values(state?.digests ?? {}).filter(Boolean) as DigestRecord[]).filter((d) => d.id !== record.id);
+    const changes = retainIssues(older, Date.now(), TALK_TTL_S * 1000);
+    await (this as any).setState({ digests: { ...changes, [record.id]: record } });
+    return { stored: record.id, dropped: Object.values(changes).filter((c) => c === null).length };
   }
 
   /** A stored issue, for talking about it. Called in-process by the router; not @rpc. */
@@ -855,11 +847,11 @@ export class AiDigest extends ManagedAgent {
   }
 
   /** Replace a stored issue's email HTML (after adding talk links to it). Called in-process; not @rpc. */
-  async setIssueHtml(id: string, html: string) {
+  async setIssueHtml(id: string, html: string, talkUntil?: string) {
     const state: any = await (this as any).getState();
     const d: DigestRecord | undefined = state?.digests?.[id];
     if (!d) return { ok: false };
-    await (this as any).setState({ digests: { [id]: { ...d, html } } });
+    await (this as any).setState({ digests: { [id]: { ...d, html, ...(talkUntil ? { talkUntil } : {}) } } });
     return { ok: true };
   }
 

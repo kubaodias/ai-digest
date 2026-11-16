@@ -224,8 +224,11 @@ async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<R
   if (!recipients.length) return json(400, { error: "no_recipients" });
   let html = rebaseLinks(record.html, publicUrl);
   if (key && assistantId) {
+    const had = html.includes("/v1/talk?t=");
     html = addTalkLinks(html, await talkLinks(key, talkBase(publicUrl), id, record.items));
-    if (html !== record.html) await feedback.setIssueHtml(id, html);
+    // New links last TALK_TTL_S from now: keep the issue that long.
+    const added = !had && html.includes("/v1/talk?t=");
+    if (html !== record.html) await feedback.setIssueHtml(id, html, added ? new Date(Date.now() + TALK_TTL_S * 1000).toISOString() : undefined);
   }
   const text = `${record.subject}\n\nThis digest is best read as HTML.${html.includes("/v1/talk?t=") ? `\n\n🎧 Talk about this issue: ${html.match(/href="([^"]*\/v1\/talk\?t=[^"]*)"/)?.[1] ?? ""}` : ""}`;
   const res: any = await env.TELNYX.post("/emails", { body: { from, to: recipients, subject: record.subject, text_body: text, html_body: html } });

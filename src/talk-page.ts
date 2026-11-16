@@ -209,23 +209,34 @@ function render(n, v, note, open = true) {
   }
   s.reasons.hidden = !open;
 }
-// A story's votes go to the server one after another (saving one takes a moment), and only the
-// answer to the latest tap updates the screen, so quick taps can't overtake each other.
-const queue = new Map(), seq = new Map();
+// A story's votes (tapped or by voice) go to the server one after another (saving one takes a moment),
+// and only the answer to the latest one updates the screen, so quick taps can't overtake each other.
 // "saved" holds the last vote the server confirmed: a failed save (an error reply or no reply) goes back to it.
-const saved = new Map();
-function send(n, args, rerender = true) {
+// "stale" marks a story whose screen may show a tap that failed while a later one was waiting: the
+// answer to the later one then redraws it.
+const queue = new Map(), seq = new Map(), saved = new Map(), stale = new Set();
+function enqueue(n, call, note, rerender = true) {
   const mine = (seq.get(n) ?? 0) + 1; seq.set(n, mine);
   if (!saved.has(n)) saved.set(n, D.votes[n]);
-  const failed = () => { if (seq.get(n) !== mine) return; toast("Couldn't save that"); render(n, saved.get(n)); };
-  const run = (queue.get(n) ?? Promise.resolve()).then(() => api("feedback", args)).then((r) => {
-    if (r?.ok) saved.set(n, r.vote ? { vote: r.vote, reasons: r.reasons ?? [] } : undefined);
-    if (seq.get(n) !== mine) return;
-    if (r?.ok) { if (rerender || !r.vote) render(n, saved.get(n), r.vote ? "Saved" : ""); else { D.votes[n] = saved.get(n); sections.get(n).acts.querySelector(".saved").textContent = "Saved"; } }
-    else failed();
-  }, failed);
+  const latest = () => seq.get(n) === mine;
+  const failed = (r) => {
+    if (!latest()) { stale.add(n); return r; }
+    stale.delete(n); toast("Couldn't save that"); render(n, saved.get(n)); return r;
+  };
+  const run = (queue.get(n) ?? Promise.resolve()).then(call).then((r) => {
+    if (!r?.ok) return failed(r);
+    const v = r.vote ? { vote: r.vote, reasons: r.reasons ?? [] } : undefined;
+    saved.set(n, v);
+    if (!latest()) return r;
+    if (rerender || !v || stale.has(n)) render(n, v, v ? note : "");
+    else { D.votes[n] = v; sections.get(n).acts.querySelector(".saved").textContent = note; }
+    stale.delete(n);
+    return r;
+  }, () => failed({ error: "couldn't reach the server" }));
   queue.set(n, run.catch(() => {}));
+  return run;
 }
+const send = (n, args, rerender) => enqueue(n, () => api("feedback", args), "Saved", rerender);
 function vote(n, v) {
   vibe(10);
   const undo = D.votes[n]?.vote === v;
@@ -254,13 +265,17 @@ function discuss(n) {
 
 // ── the conversation ──
 const tools = {
-  get_issue: () => D.brief,
+  // The story this call started on (a story's link or its Discuss button), as start_with.
+  get_issue: () => {
+    const { start_with, ...brief } = D.brief, it = callStory && byN.get(callStory);
+    return it ? { ...brief, start_with: { story: it.n, headline: it.headline } } : brief;
+  },
   show_story: ({ story } = {}) => { highlight(Number(story), true); return { ok: true }; },
   read_article: async (a) => { highlight(Number(a?.story), true); return api("read_article", a); },
   search_web: (a) => api("search_web", a),
-  record_vote: async (a) => { const r = await api("record_vote", a); if (r?.ok) { const v = r.vote ? { vote: r.vote, reasons: r.reasons ?? [] } : undefined; saved.set(Number(a.story), v); render(Number(a.story), v, "Saved by voice"); } return r; },
+  record_vote: (a) => sections.has(Number(a?.story)) ? enqueue(Number(a.story), () => api("record_vote", a), "Saved by voice") : api("record_vote", a),
 };
-let agent, gen = 0, closing = Promise.resolve(), call, live = false, busy = false, muted = false, failTimer, wake, agentState = "listening";
+let agent, callStory = null, gen = 0, closing = Promise.resolve(), call, live = false, busy = false, muted = false, failTimer, wake, agentState = "listening";
 const set = (s) => { dock.dataset.s = s; };
 function phase(p) {
   live = p === "live";
@@ -323,7 +338,7 @@ async function teardown(p = "ended") {
 }
 async function start(n) {
   if (busy || live) return;
-  const g = ++gen; busy = true; setMuted(false); phase("connecting"); set("connecting");
+  const g = ++gen; busy = true; callStory = n ?? null; setMuted(false); phase("connecting"); set("connecting");
   if (n) highlight(n, true); dk.textContent = "Connecting…";
   if (!n && active === null) dt.textContent = D.brief.digest + " · " + D.brief.sent;
   failTimer = setTimeout(() => { report("timeout", "no live call after 25 s"); fail("Couldn't connect. Try again in a moment."); }, 25000);

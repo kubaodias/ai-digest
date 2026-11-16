@@ -13,7 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 
 - An issue's links (thumbs, sign-in, the digests page) could point to another function on the same Telnyx account. Telnyx secrets belong to the account and are matched by name, and another project's deploy had replaced `PUBLIC_URL`. The deploy now stores ai-digest's secrets with the function's prefix (`AI_DIGEST_PUBLIC_URL`, …) and binds them under their usual names. A deployment whose link-signing key exists only as `FEEDBACK_KEY` keeps it under that name, so links already sent keep working; likewise an `ADMIN_EMAIL` that exists only under its old name keeps being used.
-- The feedback actor kept only the 12 newest issues across all digests, so with several digests a talk link could stop working well before its 30 days. Issues older than the newest 12 now stay, without their email HTML (the page is built from the stories), for as long as their links last, up to 200.
+- The feedback actor kept only the 12 newest issues across all digests, so with several digests a talk link could stop working well before its 30 days. Issues older than the newest 12 now stay, without their email HTML (the page is built from the stories), for as long as their links last (including links added by a resend), up to 200.
 
 ## [0.6.2] - 2026-11-13
 
