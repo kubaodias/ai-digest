@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **Talk about an issue.** Every email has a "🎧 Talk about this issue" button under its title and a "🎧 Discuss" link next to each story's thumbs. A link opens a page on your function where you talk with a voice assistant (a Telnyx AI Assistant over WebRTC, in the browser) about the issue: it reads the headlines, tells a story's background, reads the full article on request and discusses it, searches the web for follow-up questions, and records "liked it" or "not for me" as votes, like the thumbs. Stories are named by their subject, never by number. Links are signed, tied to the issue (anyone who got the email can use them) and work for 30 days. The page is the issue itself, as emailed, with a voice dock at the bottom: an orb shows who's speaking (green for the assistant, an amber ring for you), with Mute and End. Each story has 👍/👎 with reason chips and a Discuss button that switches the conversation to it without reconnecting; the assistant highlights the story it's on. The email's thumbs and view links open the same page (the vote saved, that story's reasons open, no call until you start one).
+- `ai-digest deploy` creates or updates the assistant (`ai-digest-talk`; `scripts/assistant.mjs`). Its tools run in the page, which calls `POST /v1/talk/tools/<name>` with the link's token, so the assistant holds no credential. `TALK=off` in `.env` leaves it out; `TALK_VOICE` picks another voice.
+- `GET /v1/issues` lists sent issues; `POST /v1/issues/<id>/send` emails a stored issue again, adding talk links when it has none; `to` (optional) names the recipients, and an address in it that isn't one is refused rather than replaced by the digest's recipients.
+
+### Fixed
+
+- An issue's links (thumbs, sign-in, the digests page) could point to another function on the same Telnyx account. Telnyx secrets belong to the account and are matched by name, and another project's deploy had replaced `PUBLIC_URL`. The deploy now stores ai-digest's secrets with the function's prefix (`AI_DIGEST_PUBLIC_URL`, …) and binds them under their usual names. A deployment whose link-signing key exists only as `FEEDBACK_KEY` keeps it under that name, so links already sent keep working; likewise an `ADMIN_EMAIL` that exists only under its old name keeps being used.
+- The feedback actor kept only the 12 newest issues across all digests, so with several digests a talk link could stop working well before its 30 days. Issues older than the newest 12 now stay, without their email HTML (the page is built from the stories), for as long as their links last (including links added by a resend or minted when the page is opened), up to 200.
+
 ## [0.6.2] - 2026-11-13
 
 ### Fixed

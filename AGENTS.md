@@ -9,6 +9,7 @@ Context for a coding agent working in this repository: an AI agent on Telnyx Edg
 | `src/profile.ts` | Digest definitions: parsing, validation, the run request | you |
 | `src/instructions.ts` | How the research model researches and writes any digest | you |
 | `src/pool.ts`, `src/watch-instructions.ts` | Watching digests (`watch:`): the candidate pool, scoring and send decisions; the check and issue-writing requests | you |
+| `src/talk.ts`, `src/talk-instructions.ts`, `scripts/assistant.mjs` | Talking about an issue: signed links, the browser page and its tools; the voice assistant's prompt; creating the assistant on deploy | you |
 | `src/general.ts` | The built-in General digest's template (one-off topics, `ai-digest ask`) | you |
 | `src/images.ts`, `src/feedback.ts`, `src/preferences.ts`, `src/digest.ts`, `src/config.ts`, `src/auth.ts` | Pictures, feedback, preference scoring, digest detection, settings from secrets, the operator token | you |
 | `bin/ai-digest.mjs` | The `ai-digest` command (after `npm link`): dispatches to the scripts | you |

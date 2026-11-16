@@ -269,3 +269,23 @@ test("links and icons use the configured public URL, nothing hard-coded", async 
   assert.doesNotMatch(html, /telnyxcompute\.com/);
 });
 
+
+test("retainIssues: the newest 12 stay as they are; older ones lose their HTML and stay while their talk links last", async () => {
+  const { retainIssues, KEEP_DIGESTS } = await import("../src/feedback.ts");
+  const DAY = 86400_000, now = Date.parse("2026-11-16T12:00:00Z"), ttl = 30 * DAY;
+  const issue = (id: string, daysAgo: number, extra = {}) => ({ id, subject: id, sentAt: new Date(now - daysAgo * DAY).toISOString(), items: [], html: "<p>x</p>", ...extra });
+  // Two old issues, both among the newest 12: kept whole however old they are.
+  assert.deepEqual(retainIssues([issue("a", 40), issue("b", 90)], now, ttl), {});
+  // Beyond the newest 12: HTML dropped while the links are valid, the issue dropped after.
+  const many = Array.from({ length: KEEP_DIGESTS + 2 }, (_, i) => issue(`i${String(i).padStart(2, "0")}`, i + 1));
+  many.push(issue("old", 45), issue("resent", 50, { talkUntil: new Date(now + 5 * DAY).toISOString() }));
+  const out = retainIssues(many, now, ttl);
+  assert.equal(out.i10, undefined);
+  assert.equal(out.i11?.html, "");
+  assert.equal(out.i13?.html, "");
+  assert.equal(out.old, null);
+  assert.equal(out.resent?.html, "");
+  // talkUntil lags the newest link by up to a day (keepIssueUntil skips smaller moves): kept a day past it.
+  const lag = retainIssues([...many.slice(0, KEEP_DIGESTS), issue("lag", 50, { talkUntil: new Date(now - 12 * 3600_000).toISOString() })], now, ttl);
+  assert.equal(lag.lag?.html, "");
+});
