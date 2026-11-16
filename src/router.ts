@@ -210,6 +210,15 @@ function talkError(status: number, message: string): Response {
   });
 }
 
+/** The recipients a request names: every address in every entry ("a@example.com, b@example.com" is two), all valid, at least one. */
+export function givenRecipients(to: unknown[]): { ok: true; to: string[] } | { ok: false; message: string } {
+  const words = to.flatMap((a) => (typeof a === "string" ? a.split(/[,;\s]+/).filter(Boolean) : [a]));
+  const invalid = words.filter((w) => typeof w !== "string" || parseRecipients(w).length !== 1);
+  if (invalid.length) return { ok: false, message: `not email addresses: ${invalid.map((a) => JSON.stringify(a)).join(", ")}` };
+  if (!words.length) return { ok: false, message: "no addresses in to (leave it out to use the digest's recipients)" };
+  return { ok: true, to: words as string[] };
+}
+
 /** Email a stored issue again (its stored HTML), adding talk links when it has none. */
 async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<Response> {
   const s = (n: string) => secret(env as any, n);
@@ -218,20 +227,22 @@ async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<R
   const record = await feedback.issueRecord(id);
   if (!record?.html) return json(404, { error: "not_found", message: `no stored issue "${id}" (GET /v1/issues lists them)` });
   if (!env.TELNYX || !from || !publicUrl) return json(503, { error: "not_configured", message: "email isn't configured" });
-  // Recipients given are used as given: a mistyped one is an error, never a reason to email the default audience.
+  // Recipients given are used as given: a mistyped one, or none at all, is an error, never a reason to
+  // email the default audience. The defaults are only for a request that leaves `to` out.
+  let recipients: string[];
   if (to) {
-    // Every address in every entry ("a@example.com, b@example.com" is two), not just one per entry.
-    const invalid = to.flatMap((a) => (typeof a !== "string" ? [a] : a.split(/[,;\s]+/).filter((x) => x && !parseRecipients(x).length)));
-    if (to.some((a) => typeof a === "string" && !a.trim())) invalid.push("");
-    if (invalid.length || !to.length) return json(400, { error: "invalid_recipients", message: to.length ? `not email addresses: ${invalid.map((a) => JSON.stringify(a)).join(", ")}` : "to is empty (leave it out to use the digest's recipients)" });
+    const given = givenRecipients(to);
+    if (!given.ok) return json(400, { error: "invalid_recipients", message: given.message });
+    recipients = given.to;
+  } else {
+    recipients = [];
+    if (record.profile) {
+      const d = await env.AI_DIGEST.idFromName(DIGESTS_ACTOR).getDigest(record.profile).catch(() => undefined);
+      if (d) recipients = parseProfile(record.profile, d.markdown).to;
+    }
+    if (!recipients.length) recipients = parseRecipients(defaultTo);
+    if (!recipients.length) return json(400, { error: "no_recipients" });
   }
-  let recipients = (to ?? []).flatMap((a) => parseRecipients(a));
-  if (!to && record.profile) {
-    const d = await env.AI_DIGEST.idFromName(DIGESTS_ACTOR).getDigest(record.profile).catch(() => undefined);
-    if (d) recipients = parseProfile(record.profile, d.markdown).to;
-  }
-  if (!recipients.length) recipients = parseRecipients(defaultTo);
-  if (!recipients.length) return json(400, { error: "no_recipients" });
   let html = rebaseLinks(record.html, publicUrl);
   if (key && assistantId) {
     const had = html.includes("/v1/talk?t=");
@@ -382,7 +393,12 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
       return json(200, issues);
     }
     if (parts[0] === "issues" && parts[1] && parts[2] === "send" && parts.length === 3 && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      // An empty body means the defaults; a body that isn't JSON is refused (it might have named recipients).
+      const raw = await req.text();
+      let body: any = {};
+      if (raw.trim()) {
+        try { body = JSON.parse(raw); } catch { return json(400, { error: "invalid_json" }); }
+      }
       const to = body?.to;
       return resendIssue(env, parts[1], to === undefined || to === null ? undefined : Array.isArray(to) ? to : [to]);
     }
