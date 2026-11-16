@@ -39,15 +39,17 @@ const LINK_TTL_S = 90 * 24 * 3600;
 export const KEEP_DIGESTS = 12;
 /** How many past issues it keeps at most (older than KEEP_DIGESTS without their HTML, and only while their talk links last). */
 export const KEEP_ISSUES = 200;
+/** How far talkUntil may lag behind the newest link: keepIssueUntil skips smaller moves, so retention adds this much. */
+export const TALK_UNTIL_SLACK_MS = 86400_000;
 
 /**
  * What to change in the stored issues when a new one is kept: the newest KEEP_DIGESTS stay as they are;
  * older ones lose their HTML and stay while their talk links are valid (ttlMs after sending, or until
- * talkUntil), up to KEEP_ISSUES in all. `older` excludes the new issue. null drops an issue.
+ * talkUntil plus TALK_UNTIL_SLACK_MS), up to KEEP_ISSUES in all. `older` excludes the new issue. null drops an issue.
  */
 export function retainIssues(older: DigestRecord[], now: number, ttlMs: number): Record<string, DigestRecord | null> {
   const out: Record<string, DigestRecord | null> = {};
-  const until = (d: DigestRecord) => Math.max(Date.parse(d.sentAt) + ttlMs, Date.parse(d.talkUntil ?? "") || 0);
+  const until = (d: DigestRecord) => Math.max(Date.parse(d.sentAt) + ttlMs, d.talkUntil ? Date.parse(d.talkUntil) + TALK_UNTIL_SLACK_MS : 0);
   [...older].sort((a, b) => b.sentAt.localeCompare(a.sentAt)).forEach((d, i) => {
     const n = i + 1; // the new issue is first
     if (n < KEEP_DIGESTS) return;

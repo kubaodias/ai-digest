@@ -18,7 +18,7 @@ import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from ".
 import { TALK_TTL_S, addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
 import {
   FEEDBACK_CONVERSATION, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
-  nextVote, preferencesFrom, retainIssues, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
+  nextVote, preferencesFrom, retainIssues, tagItems, TALK_UNTIL_SLACK_MS, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
 } from "./feedback.ts";
 
 // ai-digest: a research agent on Telnyx Edge Compute that writes email digests
@@ -854,14 +854,15 @@ export class AiDigest extends ManagedAgent {
 
   /**
    * Keep an issue at least until `until` (ISO), when talk links minted for it expire. Written only when that
-   * moves its deadline by more than a day, so opening the page doesn't write every time. Called in-process; not @rpc.
+   * moves its deadline by more than TALK_UNTIL_SLACK_MS, so opening the page doesn't write every time;
+   * retainIssues keeps issues that much past talkUntil, so every link minted stays covered. Called in-process; not @rpc.
    */
   async keepIssueUntil(id: string, until: string) {
     const state: any = await (this as any).getState();
     const d: DigestRecord | undefined = state?.digests?.[id];
     if (!d) return { ok: false };
     const now = Date.parse(until), was = Date.parse(d.talkUntil ?? "") || 0;
-    if (now - was > 86400_000) await (this as any).setState({ digests: { [id]: { ...d, talkUntil: until } } });
+    if (now - was > TALK_UNTIL_SLACK_MS) await (this as any).setState({ digests: { [id]: { ...d, talkUntil: until } } });
     return { ok: true };
   }
 

@@ -285,4 +285,7 @@ test("retainIssues: the newest 12 stay as they are; older ones lose their HTML a
   assert.equal(out.i13?.html, "");
   assert.equal(out.old, null);
   assert.equal(out.resent?.html, "");
+  // talkUntil lags the newest link by up to a day (keepIssueUntil skips smaller moves): kept a day past it.
+  const lag = retainIssues([...many.slice(0, KEEP_DIGESTS), issue("lag", 50, { talkUntil: new Date(now - 12 * 3600_000).toISOString() })], now, ttl);
+  assert.equal(lag.lag?.html, "");
 });

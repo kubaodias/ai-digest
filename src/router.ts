@@ -220,7 +220,9 @@ async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<R
   if (!env.TELNYX || !from || !publicUrl) return json(503, { error: "not_configured", message: "email isn't configured" });
   // Recipients given are used as given: a mistyped one is an error, never a reason to email the default audience.
   if (to) {
-    const invalid = to.filter((a) => typeof a !== "string" || !parseRecipients(a).length);
+    // Every address in every entry ("a@example.com, b@example.com" is two), not just one per entry.
+    const invalid = to.flatMap((a) => (typeof a !== "string" ? [a] : a.split(/[,;\s]+/).filter((x) => x && !parseRecipients(x).length)));
+    if (to.some((a) => typeof a === "string" && !a.trim())) invalid.push("");
     if (invalid.length || !to.length) return json(400, { error: "invalid_recipients", message: to.length ? `not email addresses: ${invalid.map((a) => JSON.stringify(a)).join(", ")}` : "to is empty (leave it out to use the digest's recipients)" });
   }
   let recipients = (to ?? []).flatMap((a) => parseRecipients(a));
