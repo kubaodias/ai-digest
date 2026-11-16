@@ -7,6 +7,7 @@ import { esc, type DigestRecord } from "./feedback.ts";
 import { DOWN_REASONS, UP_REASONS, reasonLabel } from "./preferences.ts";
 import { AGENT_LIB, headerValue, issueBrief } from "./talk.ts";
 import { talkGreeting } from "./talk-instructions.ts";
+import { ISSUE_END, ISSUE_START } from "./agent.ts";
 
 export interface TalkPageInput {
   token: string;
@@ -24,9 +25,13 @@ export interface TalkPageInput {
   voted?: number;
 }
 
-/** The email's content cell (renderEmailHtml in agent.ts): the issue without the email's frame. */
+/** The issue without the email's frame: between the marks renderEmailHtml puts around it. */
 export function emailBody(html: string | undefined): string | undefined {
-  return html?.match(/<td style="padding:28px 28px 8px;[^"]*">\n?([\s\S]*?)\n?<\/td><\/tr>\s*<tr><td style="padding:14px 28px 22px/)?.[1];
+  if (!html) return undefined;
+  const from = html.indexOf(ISSUE_START), to = html.indexOf(ISSUE_END);
+  if (from >= 0 && to > from) return html.slice(from + ISSUE_START.length, to).replace(/^\n|\n$/g, "");
+  // Issues sent before the marks: the email's content cell.
+  return html.match(/<td style="padding:28px 28px 8px;[^"]*">\n?([\s\S]*?)\n?<\/td><\/tr>\s*<tr><td style="padding:14px 28px 22px/)?.[1];
 }
 
 /** A plain body for an issue whose HTML isn't stored. */
@@ -207,21 +212,25 @@ function render(n, v, note, open = true) {
 // A story's votes go to the server one after another (saving one takes a moment), and only the
 // answer to the latest tap updates the screen, so quick taps can't overtake each other.
 const queue = new Map(), seq = new Map();
+// "saved" holds the last vote the server confirmed: a failed save (an error reply or no reply) goes back to it.
+const saved = new Map();
 function send(n, args, rerender = true) {
   const mine = (seq.get(n) ?? 0) + 1; seq.set(n, mine);
-  const before = D.votes[n];
+  if (!saved.has(n)) saved.set(n, D.votes[n]);
+  const failed = () => { if (seq.get(n) !== mine) return; toast("Couldn't save that"); render(n, saved.get(n)); };
   const run = (queue.get(n) ?? Promise.resolve()).then(() => api("feedback", args)).then((r) => {
+    if (r?.ok) saved.set(n, r.vote ? { vote: r.vote, reasons: r.reasons ?? [] } : undefined);
     if (seq.get(n) !== mine) return;
-    if (r?.ok) { if (rerender || !r.vote) render(n, r.vote ? { vote: r.vote, reasons: r.reasons } : undefined, r.vote ? "Saved" : ""); else { D.votes[n] = { vote: r.vote, reasons: r.reasons }; sections.get(n).acts.querySelector(".saved").textContent = "Saved"; } }
-    else { toast("Couldn't save that"); render(n, before); }
-  });
+    if (r?.ok) { if (rerender || !r.vote) render(n, saved.get(n), r.vote ? "Saved" : ""); else { D.votes[n] = saved.get(n); sections.get(n).acts.querySelector(".saved").textContent = "Saved"; } }
+    else failed();
+  }, failed);
   queue.set(n, run.catch(() => {}));
 }
 function vote(n, v) {
   vibe(10);
   const undo = D.votes[n]?.vote === v;
-  render(n, undo ? undefined : { vote: v, reasons: [] });
   send(n, { story: n, vote: v, undo });
+  render(n, undo ? undefined : { vote: v, reasons: [] });
 }
 
 // ── which story is being discussed ──
@@ -249,9 +258,9 @@ const tools = {
   show_story: ({ story } = {}) => { highlight(Number(story), true); return { ok: true }; },
   read_article: async (a) => { highlight(Number(a?.story), true); return api("read_article", a); },
   search_web: (a) => api("search_web", a),
-  record_vote: async (a) => { const r = await api("record_vote", a); if (r?.ok) render(Number(a.story), { vote: r.vote, reasons: r.reasons ?? [] }, "Saved by voice"); return r; },
+  record_vote: async (a) => { const r = await api("record_vote", a); if (r?.ok) { const v = r.vote ? { vote: r.vote, reasons: r.reasons ?? [] } : undefined; saved.set(Number(a.story), v); render(Number(a.story), v, "Saved by voice"); } return r; },
 };
-let agent, call, live = false, busy = false, muted = false, failTimer, wake, agentState = "listening";
+let agent, gen = 0, closing = Promise.resolve(), call, live = false, busy = false, muted = false, failTimer, wake, agentState = "listening";
 const set = (s) => { dock.dataset.s = s; };
 function phase(p) {
   live = p === "live";
@@ -297,27 +306,37 @@ function reason(e) {
 function fail(message) { clearTimeout(failTimer); if (!busy && !live) return; toast(message); teardown("idle"); }
 async function teardown(p = "ended") {
   clearTimeout(failTimer);
-  const was = live; phase(p); set(p); busy = false;
+  const was = live; gen++; phase(p); set(p); busy = false;
   // No story is being discussed any more (Resume still starts on the last one).
   for (const x of sections.values()) x.sec.classList.remove("active");
   remoteLevel = localLevel = () => 0;
-  try { await wake?.release(); } catch {} wake = undefined;
-  try { await agent?.endConversation(); } catch {}
-  try { await agent?.disconnect(); } catch {}
-  agent = undefined; call = undefined;
+  // Close this conversation's own agent: a Resume tapped meanwhile waits for it, then makes a new one.
+  const a = agent, w = wake; agent = undefined; call = undefined; wake = undefined;
+  const done = closing.then(async () => {
+    try { await w?.release(); } catch {}
+    try { await a?.endConversation(); } catch {}
+    try { await a?.disconnect(); } catch {}
+  });
+  closing = done;
   if (was) toast("Conversation ended");
+  await done;
 }
 async function start(n) {
   if (busy || live) return;
-  busy = true; setMuted(false); phase("connecting"); set("connecting");
+  const g = ++gen; busy = true; setMuted(false); phase("connecting"); set("connecting");
   if (n) highlight(n, true); dk.textContent = "Connecting…";
   if (!n && active === null) dt.textContent = D.brief.digest + " · " + D.brief.sent;
   failTimer = setTimeout(() => { report("timeout", "no live call after 25 s"); fail("Couldn't connect. Try again in a moment."); }, 25000);
   try {
+    await closing;
     const { TelnyxAIAgent } = await import(D.lib);
-    agent = new TelnyxAIAgent({ agentId: D.assistantId, clientTools: tools, clientToolTimeoutMs: 45000 });
-    agent.on("conversation.agent.state", (s) => { if (!s?.state) return; agentState = s.state; if (live && !muted) set(s.state); });
-    agent.on("conversation.update", (ev) => {
+    if (g !== gen) return;
+    // Each start has its own agent; events from one that has since been closed are ignored.
+    const me = new TelnyxAIAgent({ agentId: D.assistantId, clientTools: tools, clientToolTimeoutMs: 45000 });
+    agent = me;
+    const mine = (f) => (...x) => { if (g === gen) f(...x); };
+    me.on("conversation.agent.state", mine((s) => { if (!s?.state) return; agentState = s.state; if (live && !muted) set(s.state); }));
+    me.on("conversation.update", mine((ev) => {
       const c = ev?.call; if (!c) return;
       call = c;
       if (c.remoteStream && audio.srcObject !== c.remoteStream) { audio.srcObject = c.remoteStream; remoteLevel = meter(c.remoteStream); play(); }
@@ -325,22 +344,23 @@ async function start(n) {
       if (c.state === "active" && !live) {
         clearTimeout(failTimer); busy = false; phase("live"); set("listening");
         dk.textContent = active ? "Discussing" : "Talking about"; dt.textContent = active ? byN.get(active).headline : D.brief.digest + " · " + D.brief.sent;
-        navigator.wakeLock?.request("screen").then((w) => (wake = w)).catch(() => {});
+        navigator.wakeLock?.request("screen").then((w) => { if (g === gen) wake = w; else w.release().catch(() => {}); }).catch(() => {});
       }
       if ((c.state === "hangup" || c.state === "destroy") && live) teardown("ended");
-    });
+    }));
     // Some errors are warnings the library recovers from: report them, and give up only on fatal ones (or after the timeout).
-    agent.on("agent.error", (e) => { console.warn("agent error", e); report(live ? "live" : "starting", e); if (!live && (e?.fatal || /login|auth|permission|NotAllowed|not supported/i.test(String(e?.message ?? e)))) fail(reason(e)); });
+    me.on("agent.error", mine((e) => { console.warn("agent error", e); report(live ? "live" : "starting", e); if (!live && (e?.fatal || /login|auth|permission|NotAllowed|not supported/i.test(String(e?.message ?? e)))) fail(reason(e)); }));
     // Start only when both the login reply and the client's ready event have arrived: an invite sent in
     // between is dropped when the SDK re-attaches its session (SESSION_NOT_REATTACHED).
-    const once = (ev) => new Promise((resolve) => agent.once(ev, resolve));
+    const once = (ev) => new Promise((resolve) => me.once(ev, resolve));
     const ready = Promise.all([once("agent.login.success"), once("agent.connected")]);
-    await agent.connect();
+    await me.connect();
     await ready;
-    if (!busy) return;
+    if (g !== gen) return;
     const greeting = n ? byN.get(n).greeting : D.greeting;
-    await agent.startConversation({ customHeaders: [{ name: "X-Greeting", value: greeting }, { name: "X-Digest", value: D.digest }], audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    await me.startConversation({ customHeaders: [{ name: "X-Greeting", value: greeting }, { name: "X-Digest", value: D.digest }], audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   } catch (e) {
+    if (g !== gen) return;
     console.error(e); report("start", e); fail(reason(e));
   }
 }

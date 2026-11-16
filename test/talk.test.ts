@@ -66,3 +66,16 @@ test("rebaseLinks: the issue's own links move to the public URL; article links s
   const html = `<a href="https://other-fn.telnyxcompute.com/v1/feedback?p=1&s=x"><img src="https://other-fn.telnyxcompute.com/v1/assets/thumb-up.png"></a><a href="https://blog.example.org/v1/feedbackform">article</a>`;
   assert.equal(rebaseLinks(html, "https://digest.example.com"), `<a href="https://digest.example.com/v1/feedback?p=1&s=x"><img src="https://digest.example.com/v1/assets/thumb-up.png"></a><a href="https://blog.example.org/v1/feedbackform">article</a>`);
 });
+
+test("talk page: takes the issue out of the email it was sent as, and out of emails sent before the marks", async () => {
+  const { renderEmailHtml } = await import("../src/agent.ts");
+  const { emailBody } = await import("../src/talk-page.ts");
+  const html = renderEmailHtml("# Weekly\n\n## 1. A story\n**Why it matters:** because\n", "Weekly");
+  const body = emailBody(html)!;
+  assert.match(body, /^<h1[^>]*>Weekly<\/h1>/);
+  assert.match(body, /A story/);
+  assert.doesNotMatch(body, /Telnyx Edge Compute|<td/);
+  const legacy = html.replace(/<!--\/?ai-digest:issue-->\n/g, "");
+  assert.equal(emailBody(legacy), body);
+  assert.equal(emailBody(undefined), undefined);
+});

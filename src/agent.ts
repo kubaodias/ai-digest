@@ -5,7 +5,7 @@ import { z } from "zod";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { addImages } from "./images.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
-import { DOWN_REASONS, UP_REASONS, sharedEntityPrefs, validReason } from "./preferences.ts";
+import { DOWN_REASONS, UP_REASONS, selectionsOf, sharedEntityPrefs, validReason } from "./preferences.ts";
 import { digestFromReply } from "./digest.ts";
 import { SECRET, loadConfig, secret } from "./config.ts";
 import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
@@ -15,9 +15,9 @@ import {
   type Candidate, type Decision, type PoolEntry, type RunLease, type Sighting,
 } from "./pool.ts";
 import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
-import { addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
+import { TALK_TTL_S, addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
 import {
-  FEEDBACK_CONVERSATION, KEEP_DIGESTS, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
+  FEEDBACK_CONVERSATION, KEEP_DIGESTS, KEEP_ISSUES, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, tagItems, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
 } from "./feedback.ts";
 
@@ -50,6 +50,10 @@ const spec: ManagedAgentSpec = {
 const LOGO_URL = "https://www.activepieces.com/piece-icon/telnyx";
 
 /** Markdown → an email-safe HTML document (inline styles; Gmail drops most <style> rules). */
+/** Marks around the issue in the email, so the talk page can take it out without depending on the layout. */
+export const ISSUE_START = "<!--ai-digest:issue-->";
+export const ISSUE_END = "<!--/ai-digest:issue-->";
+
 export function renderEmailHtml(markdown: string, subject: string): string {
   const body = (marked.parse(markdown, { async: false, gfm: true, breaks: true }) as string)
     .replace(/<h1>/g, '<h1 style="font-size:24px;line-height:1.3;margin:0 0 20px;color:#111827;">')
@@ -74,7 +78,9 @@ export function renderEmailHtml(markdown: string, subject: string): string {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f4;"><tr><td align="center" style="padding:24px 12px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border-radius:10px;">
 <tr><td style="padding:28px 28px 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;">
+${ISSUE_START}
 ${body}
+${ISSUE_END}
 </td></tr>
 <tr><td style="padding:14px 28px 22px;border-top:1px solid #f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:20px;color:#9ca3af;">
 <span style="vertical-align:middle;">AI Digest · made with <a href="https://telnyx.com/products/edge-compute" style="color:#9ca3af;text-decoration:underline;">Telnyx Edge Compute</a></span><img src="${LOGO_URL}" width="20" height="20" alt="Telnyx" style="display:inline-block;width:20px;height:20px;border:0;vertical-align:middle;margin-left:6px;">
@@ -821,13 +827,25 @@ export class AiDigest extends ManagedAgent {
     console.log(JSON.stringify({ feedback: "memory deleted again", source: p.source }));
   }
 
-  /** Keep a sent digest (newest KEEP_DIGESTS). Called in-process when a digest is emailed; not @rpc, so not on the public mount. */
-  async registerDigest(record: DigestRecord) {
+  /**
+   * Keep a sent digest. The newest KEEP_DIGESTS keep their email HTML; older ones stay (without it) while
+   * their talk links are valid (TALK_TTL_S), so a link works for as long as it says, up to KEEP_ISSUES in all.
+   * Called in-process when a digest is emailed; not @rpc, so not on the public mount.
+   */
+  async registerDigest(record: DigestRecord, now = Date.now()) {
     const state: any = await (this as any).getState();
-    const older = Object.values(state?.digests ?? {}).filter(Boolean) as DigestRecord[];
-    const drop = older.sort((a, b) => b.sentAt.localeCompare(a.sentAt)).slice(KEEP_DIGESTS - 1).map((d) => d.id);
-    await (this as any).setState({ digests: { [record.id]: record, ...Object.fromEntries(drop.map((d) => [d, null])) } });
-    return { stored: record.id, dropped: drop.length };
+    const older = (Object.values(state?.digests ?? {}).filter(Boolean) as DigestRecord[])
+      .filter((d) => d.id !== record.id)
+      .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
+    const changes: Record<string, DigestRecord | null> = { [record.id]: record };
+    let dropped = 0;
+    older.forEach((d, i) => {
+      const n = i + 1; // the new record is first
+      if (n >= KEEP_ISSUES || now - Date.parse(d.sentAt) > TALK_TTL_S * 1000) { changes[d.id] = null; dropped++; }
+      else if (n >= KEEP_DIGESTS && d.html) changes[d.id] = { ...d, html: "" };
+    });
+    await (this as any).setState({ digests: changes });
+    return { stored: record.id, dropped };
   }
 
   /** A stored issue, for talking about it. Called in-process by the router; not @rpc. */
@@ -884,15 +902,15 @@ export class AiDigest extends ManagedAgent {
       });
       await (this as any).setState({ votes: { [id]: vote } });
     }
-    console.log(JSON.stringify({ feedback: "vote", via: p.via ?? "talk", id, vote: vote.vote, reasons: vote.reasons ?? [], changed }));
-    return { ok: true, story: p.i, vote: vote.vote, reasons: vote.reasons ?? [], headline: item.headline };
+    console.log(JSON.stringify({ feedback: "vote", via: p.via ?? "talk", id, vote: vote.vote, reasons: selectionsOf(vote), changed }));
+    return { ok: true, story: p.i, vote: vote.vote, reasons: selectionsOf(vote), headline: item.headline };
   }
 
   /** The votes on one issue's stories, for the talk page: item number → vote and reasons. Called in-process; not @rpc. */
   async issueVotes(d: string) {
     const state: any = await (this as any).getState();
     const out: Record<number, { vote: string; reasons: { r: string; target?: string }[] }> = {};
-    for (const v of Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]) if (v.digest === d) out[v.item] = { vote: v.vote, reasons: (v.reasons ?? []) as any };
+    for (const v of Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]) if (v.digest === d) out[v.item] = { vote: v.vote, reasons: selectionsOf(v) };
     return out;
   }
 

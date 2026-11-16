@@ -63,10 +63,11 @@ const existing = new Set((await telnyx(env, "GET", "/compute/secrets?page[size]=
 // Secrets belong to the account and are matched by name, so another project's PUBLIC_URL would replace ours.
 // Ours carry the function's prefix (AI_DIGEST_PUBLIC_URL, …); the code reads them by binding name (PUBLIC_URL, …).
 const PREFIX = name.toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_";
-// The link-signing key can't be copied (secret values aren't readable): a deployment that only has the old
-// shared FEEDBACK_KEY keeps using it, so links in emails already sent keep working. Set FEEDBACK_KEY in .env to move it.
-const legacyFeedbackKey = !env.FEEDBACK_KEY && !existing.has(`${PREFIX}FEEDBACK_KEY`) && existing.has("FEEDBACK_KEY");
-const secretName = (binding) => (binding === "FEEDBACK_KEY" && legacyFeedbackKey ? "FEEDBACK_KEY" : PREFIX + binding);
+// Secret values can't be read back, so the ones that may exist only in Telnyx (not in .env) can't be copied to
+// the new name: a deployment that only has the old unprefixed FEEDBACK_KEY or ADMIN_EMAIL keeps using it, so
+// links in emails already sent keep working and sign-in emails keep their recipient. Set it in .env to move it.
+const LEGACY = new Set(["FEEDBACK_KEY", "ADMIN_EMAIL"].filter((b) => !env[b] && !existing.has(PREFIX + b) && existing.has(b)));
+const secretName = (binding) => (LEGACY.has(binding) ? binding : PREFIX + binding);
 async function setSecret(key, value) {
   await telnyx(env, "POST", "/compute/secrets", { secret_name: secretName(key), secret_value: value });
   console.log(`  ✓ ${secretName(key)}`);

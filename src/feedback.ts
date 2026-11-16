@@ -37,6 +37,8 @@ export function assetUrl(base: string, name: string): string {
 const LINK_TTL_S = 90 * 24 * 3600;
 /** How many past digests the feedback actor keeps (with their email HTML). */
 export const KEEP_DIGESTS = 12;
+/** How many past issues it keeps at most (older than KEEP_DIGESTS without their HTML, and only while their talk links last). */
+export const KEEP_ISSUES = 200;
 const TAG_MODEL = "Qwen/Qwen3.8-27B";
 
 export type Vote = "up" | "down";
