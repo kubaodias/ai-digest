@@ -95,6 +95,17 @@ async function feedbackKey(env: ManagedEnv): Promise<string | undefined> {
   return secrets ? ((await secrets.get(SECRET.feedbackKey).catch(() => "")) || undefined) : undefined;
 }
 
+/**
+ * "I don't use X" needs to know X: fill in entities for a vote on an item tagged before entities existed
+ * (the main one is meant). Used by the email's thumbs and the talk page alike.
+ */
+async function backfillEntities(telnyx: any, vote: StoredVote, item: { why?: string } | undefined): Promise<void> {
+  const untargeted = vote.reasons?.find((x) => x.r === "entity" && !x.target);
+  if (!untargeted || vote.entities?.length) return;
+  vote.entities = (await tagItems(telnyx, [{ headline: vote.headline, why: item?.why ?? "" }]))[0]?.entities ?? [];
+  if (vote.entities[0]) untargeted.target = vote.entities[0];
+}
+
 /** The service actors, reached in-process. */
 const feedbackActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
 const digestsActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(DIGESTS_CONVERSATION);
@@ -780,12 +791,7 @@ export class AiDigest extends ManagedAgent {
       const { vote, changed } = nextVote(prior, p, item, new Date().toISOString());
       vote.profile ??= profile;
       if (digest?.topic) vote.topic ??= digest.topic;
-      // "I don't use X" needs to know X: fill in entities for votes on items tagged before entities existed; the main one is meant.
-      const untargeted = vote.reasons?.find((x) => x.r === "entity" && !x.target);
-      if (untargeted && !vote.entities?.length) {
-        vote.entities = (await tagItems(telnyx, [{ headline: vote.headline, why: item?.why ?? "" }]))[0]?.entities ?? [];
-        if (vote.entities[0]) untargeted.target = vote.entities[0];
-      }
+      await backfillEntities(telnyx, vote, item);
       if (changed) {
         vote.memorySource = await rememberVote(telnyx, profile, vote).catch((err: unknown) => {
           console.log(JSON.stringify({ feedback: "memory write failed", error: String(err) }));
@@ -846,6 +852,19 @@ export class AiDigest extends ManagedAgent {
     return state?.digests?.[id] ?? undefined;
   }
 
+  /**
+   * Keep an issue at least until `until` (ISO), when talk links minted for it expire. Written only when that
+   * moves its deadline by more than a day, so opening the page doesn't write every time. Called in-process; not @rpc.
+   */
+  async keepIssueUntil(id: string, until: string) {
+    const state: any = await (this as any).getState();
+    const d: DigestRecord | undefined = state?.digests?.[id];
+    if (!d) return { ok: false };
+    const now = Date.parse(until), was = Date.parse(d.talkUntil ?? "") || 0;
+    if (now - was > 86400_000) await (this as any).setState({ digests: { [id]: { ...d, talkUntil: until } } });
+    return { ok: true };
+  }
+
   /** Replace a stored issue's email HTML (after adding talk links to it). Called in-process; not @rpc. */
   async setIssueHtml(id: string, html: string, talkUntil?: string) {
     const state: any = await (this as any).getState();
@@ -887,6 +906,7 @@ export class AiDigest extends ManagedAgent {
     const { vote, changed } = nextVote(base, { d: p.d, i: p.i, v: p.v, e: 0, ...(reason ? { r: reason } : {}), ...(x !== undefined ? { x } : {}) }, item, new Date().toISOString());
     vote.profile ??= profile;
     if (digest.topic) vote.topic ??= digest.topic;
+    await backfillEntities(telnyx, vote, item);
     if (changed || base !== prior) {
       vote.memorySource = await rememberVote(telnyx, profile, vote).catch((err: unknown) => {
         console.log(JSON.stringify({ feedback: "memory write failed", error: String(err) }));

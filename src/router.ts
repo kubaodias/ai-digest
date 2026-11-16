@@ -188,7 +188,10 @@ async function issuePageFor(req: Request, env: RouterEnv): Promise<Response | un
   const record = await feedback.issueRecord(d);
   if (!record) return undefined;
   if (voted !== undefined && v) await feedback.talkVote({ d, i: voted, v, via: "email" });
-  const token = await talkToken(key, { d, e: Math.floor(Date.now() / 1000) + TALK_TTL_S });
+  const e = Math.floor(Date.now() / 1000) + TALK_TTL_S;
+  const token = await talkToken(key, { d, e });
+  // The page's links last TALK_TTL_S from now: keep the issue that long.
+  await feedback.keepIssueUntil(d, new Date(e * 1000).toISOString()).catch(() => undefined);
   return issuePage(env, url.origin, key, assistantId, record, token, { start: voted, autostart: false, voted });
 }
 
@@ -215,8 +218,13 @@ async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<R
   const record = await feedback.issueRecord(id);
   if (!record?.html) return json(404, { error: "not_found", message: `no stored issue "${id}" (GET /v1/issues lists them)` });
   if (!env.TELNYX || !from || !publicUrl) return json(503, { error: "not_configured", message: "email isn't configured" });
-  let recipients = (to ?? []).filter((a) => parseRecipients(a).length);
-  if (!recipients.length && record.profile) {
+  // Recipients given are used as given: a mistyped one is an error, never a reason to email the default audience.
+  if (to) {
+    const invalid = to.filter((a) => typeof a !== "string" || !parseRecipients(a).length);
+    if (invalid.length || !to.length) return json(400, { error: "invalid_recipients", message: to.length ? `not email addresses: ${invalid.map((a) => JSON.stringify(a)).join(", ")}` : "to is empty (leave it out to use the digest's recipients)" });
+  }
+  let recipients = (to ?? []).flatMap((a) => parseRecipients(a));
+  if (!to && record.profile) {
     const d = await env.AI_DIGEST.idFromName(DIGESTS_ACTOR).getDigest(record.profile).catch(() => undefined);
     if (d) recipients = parseProfile(record.profile, d.markdown).to;
   }
@@ -373,7 +381,8 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
     }
     if (parts[0] === "issues" && parts[1] && parts[2] === "send" && parts.length === 3 && method === "POST") {
       const body = await req.json().catch(() => ({}));
-      return resendIssue(env, parts[1], Array.isArray(body?.to) ? body.to : undefined);
+      const to = body?.to;
+      return resendIssue(env, parts[1], to === undefined || to === null ? undefined : Array.isArray(to) ? to : [to]);
     }
     if (parts[0] === "runs" && parts.length === 1 && method === "POST") {
       const body = await req.json().catch(() => undefined);
