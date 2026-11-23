@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - Internal: the email template and sending (`src/email.ts`) and delivering a finished digest (`src/delivery.ts`) moved out of the agent class's file; every email goes through one `sendEmail`. No change in what is sent.
+- Internal: the actors' state, the calls between actors and from the router to them are typed (`src/actor-state.ts`, `src/actors.ts`), so the type check covers them.
 
 ### Fixed
 

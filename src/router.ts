@@ -25,24 +25,23 @@
 
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
 import { mayUseFrontDoor } from "./auth.ts";
-import { SECRET, secret } from "./config.ts";
+import { SECRET, secret, type SecretStore } from "./config.ts";
 import { GENERAL_ID, ID_PATTERN, ProfileError, generalProfile, parseProfile, runConversation, runMessage } from "./profile.ts";
 import { GENERAL_TEMPLATE } from "./general.ts";
 import { app } from "./app.ts";
 import { parseRecipients } from "./config.ts";
 import { TALK_TTL_S, addTalkLinks, hasTalkLinks, issueTalkLink, readArticle, rebaseLinks, searchWeb, talkBase, talkLinks, talkToken, verifyTalkToken } from "./talk.ts";
-import { verifyPayload, verifyView } from "./feedback.ts";
+import { verifyPayload, verifyView, type DigestRecord } from "./feedback.ts";
 import { emailBody, talkPage } from "./talk-page.ts";
 import { sendEmail } from "./email.ts";
+import { DIGESTS_CONVERSATION, FEEDBACK_CONVERSATION, poolConversation, type ActorNamespace } from "./actors.ts";
 
 export const VERSION = "0.6.2";
-export const FEEDBACK_ACTOR = "feedback";
-export const DIGESTS_ACTOR = "digests";
 
 /** What the router needs from the environment: the actor namespace and secrets. */
 export interface RouterEnv {
-  AI_DIGEST: { idFromName(name: string): any };
-  SECRETS?: { get(name: string): Promise<string> };
+  AI_DIGEST: ActorNamespace;
+  SECRETS?: SecretStore;
   TELNYX?: { get(path: string, opts?: unknown): Promise<any>; post(path: string, opts: { body: unknown }): Promise<any> };
   [k: string]: unknown;
 }
@@ -51,15 +50,15 @@ const MEMORY = "/ai/memory/namespaces/ai-digest/profiles";
 
 /** The digests page, with what it needs from the actors, Agent Memory and Email. */
 async function appRoute(req: Request, env: RouterEnv): Promise<Response> {
-  const s = (n: string) => secret(env as any, n);
+  const s = (n: string) => secret(env, n);
   const [authKey, feedbackKey, admin, defaultTo, from] = await Promise.all([s(SECRET.authKey), s(SECRET.feedbackKey), s(SECRET.adminEmail), s(SECRET.emailTo), s(SECRET.emailFrom)]);
   const t = env.TELNYX;
   return app(req, {
     authKey,
     feedbackKey,
     adminEmail: admin || parseRecipients(defaultTo)[0],
-    digests: env.AI_DIGEST.idFromName(DIGESTS_ACTOR),
-    feedback: env.AI_DIGEST.idFromName(FEEDBACK_ACTOR),
+    digests: env.AI_DIGEST.idFromName(DIGESTS_CONVERSATION),
+    feedback: env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION),
     memory: {
       async counts() {
         const r = await t!.get(MEMORY);
@@ -72,13 +71,13 @@ async function appRoute(req: Request, env: RouterEnv): Promise<Response> {
         return r?.data?.text ?? null;
       },
     },
-    pool: (id) => env.AI_DIGEST.idFromName(poolOf(id)).poolView(),
+    pool: (id) => env.AI_DIGEST.idFromName(poolConversation(id)).poolView(),
     async sendEmail(to, subject, text, html) {
       if (!t || !from) throw new Error("email isn't configured (DIGEST_EMAIL_FROM)");
       // The digests actor sends it right after this request returns (an immediate scheduled call),
       // so the page answers at once; sending directly is the fallback.
       const queued = await Promise.resolve()
-        .then(() => env.AI_DIGEST.idFromName(DIGESTS_ACTOR).queueEmail({ to, subject, text, html }))
+        .then(() => env.AI_DIGEST.idFromName(DIGESTS_CONVERSATION).queueEmail({ to, subject, text, html }))
         .catch(() => false);
       if (!queued) await sendEmail(t, { from, to: [to], subject, text, html });
     },
@@ -109,7 +108,6 @@ export function topicSlug(topic: string): string {
 }
 
 /** A digest's pool actor (watching; agent.ts). */
-const poolOf = (id: string) => `${id}--pool`;
 /** Call an actor method, turning a synchronous throw (e.g. a missing method) into a rejection. */
 const attempt = <T>(f: () => Promise<T>) => Promise.resolve().then(f);
 
@@ -123,9 +121,9 @@ function isoParam(v: unknown, name: string): string | undefined {
 
 /** The talk page and its tools (signed by the link's token, not the operator token). */
 async function talkRoute(req: Request, env: RouterEnv, path: string, method: string): Promise<Response> {
-  const s = (n: string) => secret(env as any, n);
+  const s = (n: string) => secret(env, n);
   const [key, assistantId] = await Promise.all([s(SECRET.feedbackKey), s(SECRET.talkAssistant)]);
-  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_ACTOR);
+  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
   if (!key || !assistantId) return json(503, { error: "not_configured", message: "the voice assistant isn't deployed (ai-digest deploy sets it up)" });
   if (method === "GET" && path === "/v1/talk") {
     const url = new URL(req.url);
@@ -178,7 +176,7 @@ async function issuePageFor(req: Request, env: RouterEnv): Promise<Response | un
   const url = new URL(req.url);
   const q = url.searchParams;
   if (q.has("r") || q.has("undo") || q.has("x")) return undefined;
-  const s = (n: string) => secret(env as any, n);
+  const s = (n: string) => secret(env, n);
   const [key, assistantId] = await Promise.all([s(SECRET.feedbackKey), s(SECRET.talkAssistant)]);
   if (!key || !assistantId) return undefined;
   let d: string, voted: number | undefined, v: "up" | "down" | undefined;
@@ -190,7 +188,7 @@ async function issuePageFor(req: Request, env: RouterEnv): Promise<Response | un
     if (!p || p.r) return undefined;
     ({ d, i: voted, v } = { d: p.d, i: p.i, v: p.v });
   }
-  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_ACTOR);
+  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
   const record = await feedback.issueRecord(d);
   if (!record) return undefined;
   if (voted !== undefined && v) await feedback.talkVote({ d, i: voted, v, via: "email" });
@@ -202,10 +200,10 @@ async function issuePageFor(req: Request, env: RouterEnv): Promise<Response | un
 }
 
 /** The issue page: the issue as emailed, with talk links and the voice dock. */
-async function issuePage(env: RouterEnv, origin: string, key: string, assistantId: string, record: any, token: string, opts: { start?: number; autostart: boolean; voted?: number }): Promise<Response> {
+async function issuePage(env: RouterEnv, origin: string, key: string, assistantId: string, record: DigestRecord, token: string, opts: { start?: number; autostart: boolean; voted?: number }): Promise<Response> {
   let html = record.html ? rebaseLinks(record.html, origin) : undefined;
   if (html) html = addTalkLinks(html, await talkLinks(key, `${origin}/v1/talk`, record.id, record.items));
-  const votes = await env.AI_DIGEST.idFromName(FEEDBACK_ACTOR).issueVotes(record.id).catch(() => ({}));
+  const votes = await env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION).issueVotes(record.id).catch(() => ({}));
   return talkPage({ token, assistantId, record, start: opts.start, body: emailBody(html), votes, autostart: opts.autostart, voted: opts.voted });
 }
 
@@ -227,9 +225,9 @@ export function givenRecipients(to: unknown[]): { ok: true; to: string[] } | { o
 
 /** Email a stored issue again (its stored HTML), adding talk links when it has none. */
 async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<Response> {
-  const s = (n: string) => secret(env as any, n);
+  const s = (n: string) => secret(env, n);
   const [key, assistantId, from, defaultTo, publicUrl] = await Promise.all([s(SECRET.feedbackKey), s(SECRET.talkAssistant), s(SECRET.emailFrom), s(SECRET.emailTo), s(SECRET.publicUrl)]);
-  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_ACTOR);
+  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
   const record = await feedback.issueRecord(id);
   if (!record?.html) return json(404, { error: "not_found", message: `no stored issue "${id}" (GET /v1/issues lists them)` });
   if (!env.TELNYX || !from || !publicUrl) return json(503, { error: "not_configured", message: "email isn't configured" });
@@ -248,7 +246,7 @@ async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<R
     if (record.profile && record.profile !== GENERAL_ID) {
       let d: { markdown: string } | null;
       try {
-        d = await env.AI_DIGEST.idFromName(DIGESTS_ACTOR).getDigest(record.profile);
+        d = await env.AI_DIGEST.idFromName(DIGESTS_CONVERSATION).getDigest(record.profile);
       } catch (err) {
         console.log(JSON.stringify({ issue: "resend lookup failed", id, digest: record.profile, error: err instanceof Error ? err.message : String(err) }));
         return json(503, { error: "digest_unavailable", message: `couldn't load digest "${record.profile}" to find its recipients; try again, or pass "to"` });
@@ -302,7 +300,7 @@ export function asPublic(req: Request, publicUrl?: string): Request {
 }
 
 export async function route(incoming: Request, env: RouterEnv): Promise<Response> {
-  const req = asPublic(incoming, await secret(env as any, SECRET.publicUrl).catch(() => ""));
+  const req = asPublic(incoming, await secret(env, SECRET.publicUrl).catch(() => ""));
   const url = new URL(req.url);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method.toUpperCase();
@@ -319,14 +317,14 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
       console.log(JSON.stringify({ feedback: "issue page failed", error: err instanceof Error ? err.message : String(err) }));
       return undefined;
     });
-    return page ?? actor(FEEDBACK_ACTOR).fetch(req);
+    return page ?? actor(FEEDBACK_CONVERSATION).fetch(req);
   }
   if (path === "/v1/app" || path.startsWith("/v1/app/")) return appRoute(req, env);
   if (path === "/v1/talk" || path.startsWith("/v1/talk/")) return talkRoute(req, env, path, method);
 
   // Everything else needs the operator token.
   if (!path.startsWith("/v1/")) return json(404, { error: "not_found", message: "see /v1/health; the API lives under /v1" });
-  if (!(await mayUseFrontDoor(req, await secret(env as any, SECRET.authKey)))) {
+  if (!(await mayUseFrontDoor(req, await secret(env, SECRET.authKey)))) {
     return json(401, { error: "unauthorized", message: "send the operator token: Authorization: Bearer <token> (ai-digest does)" });
   }
 
@@ -339,10 +337,10 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
         return json(400, { error: "built_in", message: `"${GENERAL_ID}" is the built-in General digest: it can't be stored or deleted; start one with POST /v1/runs {"topic": "…"} (ai-digest ask "<topic>")` });
       }
       if (id !== undefined && !ID_PATTERN.test(id)) return json(400, { error: "bad_id", message: "ids are lowercase letters, digits and single dashes" });
-      if (!id && method === "GET") return json(200, [...(await actor(DIGESTS_ACTOR).listDigests()), generalSummary()]);
+      if (!id && method === "GET") return json(200, [...(await actor(DIGESTS_CONVERSATION).listDigests()), generalSummary()]);
       if (id && parts.length === 2) {
         if (method === "GET") {
-          const d = await actor(DIGESTS_ACTOR).getDigest(id);
+          const d = await actor(DIGESTS_CONVERSATION).getDigest(id);
           return d ? json(200, d) : json(404, { error: "not_found", message: `no digest "${id}"` });
         }
         if (method === "PUT") {
@@ -353,25 +351,25 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
             if (err instanceof ProfileError) return json(400, { error: "invalid_digest", message: err.message });
             throw err;
           }
-          const stored = await actor(DIGESTS_ACTOR).putDigest(id, markdown);
+          const stored = await actor(DIGESTS_CONVERSATION).putDigest(id, markdown);
           // Arm, re-arm or cancel the watch timer (every deploy pushes every definition, so this also repairs a lost timer).
-          const watching = await attempt(() => actor(poolOf(id)).poolConfigure()).catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
+          const watching = await attempt(() => actor(poolConversation(id)).poolConfigure()).catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));
           return json(200, { ...stored, watching });
         }
         if (method === "DELETE") {
-          const deleted = await actor(DIGESTS_ACTOR).deleteDigest(id);
+          const deleted = await actor(DIGESTS_CONVERSATION).deleteDigest(id);
           // Its timer stops and its pool is emptied, so a digest created later under the same name starts fresh.
-          await attempt(() => actor(poolOf(id)).poolDelete()).catch(() => undefined);
+          await attempt(() => actor(poolConversation(id)).poolDelete()).catch(() => undefined);
           return json(200, deleted);
         }
       }
       if (id && parts[2] === "pool" && parts.length === 3 && method === "GET") {
-        const d = await actor(DIGESTS_ACTOR).getDigest(id);
+        const d = await actor(DIGESTS_CONVERSATION).getDigest(id);
         if (!d) return json(404, { error: "not_found", message: `no digest "${id}"` });
-        return json(200, await actor(poolOf(id)).poolView());
+        return json(200, await actor(poolConversation(id)).poolView());
       }
       if (id && parts[2] === "check" && parts.length === 3 && method === "POST") {
-        const d = await actor(DIGESTS_ACTOR).getDigest(id);
+        const d = await actor(DIGESTS_CONVERSATION).getDigest(id);
         if (!d) return json(404, { error: "not_found", message: `no digest "${id}"` });
         if (!parseProfile(id, d.markdown).watch) return json(400, { error: "not_watching", message: `"${id}" doesn't watch: add "watch: 6h" to its definition and push it` });
         const body = await req.json().catch(() => ({}));
@@ -383,18 +381,18 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
           return json(400, { error: "bad_request", message: (err as Error).message.replace(/^request: /, "") });
         }
         if (since && until && since >= until) return json(400, { error: "bad_request", message: `"since" must be before "until"` });
-        const r = await actor(poolOf(id)).startCheck({ since, until, decide: body?.decide !== false });
+        const r = await actor(poolConversation(id)).startCheck({ since, until, decide: body?.decide !== false });
         return json(r.ok ? 202 : 409, { digest: id, ...r });
       }
       if (id && parts[2] === "runs" && parts.length === 3 && method === "POST") {
-        const d = await actor(DIGESTS_ACTOR).getDigest(id);
+        const d = await actor(DIGESTS_CONVERSATION).getDigest(id);
         if (!d) return json(404, { error: "not_found", message: `no digest "${id}": push it first (ai-digest push)` });
         const body = await req.json().catch(() => ({}));
         // A watching digest writes from its pool: after a fresh check (default), or right away with "check": false.
         if (parseProfile(id, d.markdown).watch) {
           const focus = typeof body?.message === "string" ? body.message : undefined;
           const fromPool = body?.check === false;
-          const r = fromPool ? await actor(poolOf(id)).writeNow({ focus }) : await actor(poolOf(id)).startCheck({ force: { focus } });
+          const r = fromPool ? await actor(poolConversation(id)).writeNow({ focus }) : await actor(poolConversation(id)).startCheck({ force: { focus } });
           return json(r.ok ? 202 : 409, { digest: id, mode: fromPool ? "from-pool" : "check-then-write", ...r });
         }
         const conversation = runConversation(id, runName(body?.run));
@@ -404,7 +402,7 @@ export async function route(incoming: Request, env: RouterEnv): Promise<Response
       }
     }
     if (parts[0] === "issues" && parts.length === 1 && method === "GET") {
-      const { issues } = await actor(FEEDBACK_ACTOR).appOverview();
+      const { issues } = await actor(FEEDBACK_CONVERSATION).appOverview();
       return json(200, issues);
     }
     if (parts[0] === "issues" && parts[1] && parts[2] === "send" && parts.length === 3 && method === "POST") {

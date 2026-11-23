@@ -194,7 +194,7 @@ export interface PoolView {
   nextCheckAt: string | null;
   lastCheckAt: string | null;
   checks: number;
-  checkRunning: { slot: string } | null;
+  checkRunning: { slot?: string } | null;
   lastIssueAt: string | null;
   issueRunning: { slot: string } | null;
   lastDecision: { action: string; reason: string; dueBy?: string } | null;
