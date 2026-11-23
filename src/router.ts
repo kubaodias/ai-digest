@@ -147,6 +147,11 @@ async function talkRoute(req: Request, env: RouterEnv, path: string, method: str
   const telnyx = env.TELNYX as any;
   const started = Date.now();
   try {
+    // Searches and article reads cost money: limited per issue and per deployment each day (TALK_LIMITS).
+    if (name === "search_web" || name === "read_article") {
+      const refused = await feedback.spendTalkTool(claim.d, name);
+      if (refused) return json(200, { error: refused });
+    }
     let out: unknown;
     if (name === "read_article") out = item ? await readArticle(telnyx, item, typeof args.focus === "string" ? args.focus.slice(0, 300) : undefined) : { error: "no such story" };
     else if (name === "search_web") out = typeof args.query === "string" && args.query.trim() ? await searchWeb(telnyx, args.query) : { error: "query is required" };
@@ -235,10 +240,20 @@ async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<R
     if (!given.ok) return json(400, { error: "invalid_recipients", message: given.message });
     recipients = given.to;
   } else {
+    // The digest's own recipients, as a scheduled send of it would use; DIGEST_EMAIL_TO when it names none
+    // (and for General and pre-digest issues). A lookup that fails, or a digest deleted since, sends nothing:
+    // falling back would email an issue to people who never subscribed to it.
     recipients = [];
-    if (record.profile) {
-      const d = await env.AI_DIGEST.idFromName(DIGESTS_ACTOR).getDigest(record.profile).catch(() => undefined);
-      if (d) recipients = parseProfile(record.profile, d.markdown).to;
+    if (record.profile && record.profile !== GENERAL_ID) {
+      let d: { markdown: string } | null;
+      try {
+        d = await env.AI_DIGEST.idFromName(DIGESTS_ACTOR).getDigest(record.profile);
+      } catch (err) {
+        console.log(JSON.stringify({ issue: "resend lookup failed", id, digest: record.profile, error: err instanceof Error ? err.message : String(err) }));
+        return json(503, { error: "digest_unavailable", message: `couldn't load digest "${record.profile}" to find its recipients; try again, or pass "to"` });
+      }
+      if (!d) return json(409, { error: "digest_gone", message: `digest "${record.profile}" no longer exists; pass "to" to send this issue` });
+      recipients = parseProfile(record.profile, d.markdown).to;
     }
     if (!recipients.length) recipients = parseRecipients(defaultTo);
     if (!recipients.length) return json(400, { error: "no_recipients" });

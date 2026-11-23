@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addTalkLinkText, addTalkLinks, rebaseLinks, digestName, headerValue, issueBrief, talkLinks, talkToken, verifyTalkToken } from "../src/talk.ts";
+import { TALK_LIMITS, spendTalkTool, addTalkLinkText, addTalkLinks, rebaseLinks, digestName, headerValue, issueBrief, talkLinks, talkToken, verifyTalkToken } from "../src/talk.ts";
 import { talkGreeting } from "../src/talk-instructions.ts";
 import type { DigestRecord } from "../src/feedback.ts";
 
@@ -78,4 +78,21 @@ test("talk page: takes the issue out of the email it was sent as, and out of ema
   const legacy = html.replace(/<!--\/?ai-digest:issue-->\n/g, "");
   assert.equal(emailBody(legacy), body);
   assert.equal(emailBody(undefined), undefined);
+});
+
+test("talk tool limits: per issue and for the deployment, per UTC day; shared use can't overspend", () => {
+  const use = { day: "", total: {}, issues: {} };
+  const day1 = new Date("2026-11-23T10:00:00Z"), day2 = new Date("2026-11-24T00:00:01Z");
+  for (let k = 0; k < TALK_LIMITS.issue.read_article; k++) assert.equal(spendTalkTool(use, "a", "read_article", day1), undefined);
+  assert.match(spendTalkTool(use, "a", "read_article", day1)!, /for this issue is used up/);
+  assert.equal(spendTalkTool(use, "a", "search_web", day1), undefined, "each tool has its own count");
+  assert.equal(spendTalkTool(use, "b", "read_article", day1), undefined, "another issue has its own count");
+  // The deployment-wide limit holds across issues.
+  let refused: string | undefined;
+  for (let k = 0; k < TALK_LIMITS.total.search_web && !refused; k++) refused = spendTalkTool(use, `i${k % 9}`, "search_web", day1);
+  assert.match(refused ?? spendTalkTool(use, "z", "search_web", day1)!, /daily limit of web searches is used up/);
+  assert.equal((use as any).total.search_web, TALK_LIMITS.total.search_web);
+  // A new day starts over.
+  assert.equal(spendTalkTool(use, "a", "read_article", day2), undefined);
+  assert.deepEqual((use as any).total, { read_article: 1 });
 });

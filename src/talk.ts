@@ -12,6 +12,37 @@ import { ARTICLE_NOTES_PROMPT, DEFAULT_GREETING, talkGreeting } from "./talk-ins
 
 /** How long a talk link works. */
 export const TALK_TTL_S = 30 * 24 * 3600;
+
+/**
+ * The paid tools a talk link can use per day (UTC): per issue, and for the whole deployment. Counted per
+ * issue, not per token, because opening the page mints a fresh token. A conversation uses a few of each.
+ */
+export const TALK_LIMITS = {
+  issue: { search_web: 30, read_article: 15 },
+  total: { search_web: 150, read_article: 60 },
+} as const;
+export type TalkTool = keyof typeof TALK_LIMITS.issue;
+export interface TalkUsage {
+  day: string;
+  total: Partial<Record<TalkTool, number>>;
+  issues: Record<string, Partial<Record<TalkTool, number>>>;
+}
+
+/**
+ * Spend one use of a paid tool for an issue: undefined when allowed (and counted), else what the assistant
+ * should tell the listener. Mutates `use` synchronously, so callers sharing one object can't overspend.
+ */
+export function spendTalkTool(use: TalkUsage, issue: string, tool: TalkTool, now = new Date()): string | undefined {
+  const day = now.toISOString().slice(0, 10);
+  if (use.day !== day) Object.assign(use, { day, total: {}, issues: {} });
+  const mine = (use.issues[issue] ??= {});
+  const what = tool === "search_web" ? "web searches" : "article reads";
+  if ((use.total[tool] ?? 0) >= TALK_LIMITS.total[tool]) return `the daily limit of ${what} is used up; answer from what you know and say you can't look it up today`;
+  if ((mine[tool] ?? 0) >= TALK_LIMITS.issue[tool]) return `the daily limit of ${what} for this issue is used up; answer from what you know and say you can't look it up again today`;
+  use.total[tool] = (use.total[tool] ?? 0) + 1;
+  mine[tool] = (mine[tool] ?? 0) + 1;
+  return undefined;
+}
 /** The model that condenses an article (fast; answers in a few seconds without reasoning). */
 const NOTES_MODEL = "Qwen/Qwen3.8-27B";
 const ARTICLE_MAX_CHARS = 40_000;

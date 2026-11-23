@@ -325,3 +325,36 @@ test("resending an issue: recipients given are used as given, a mistyped one is 
   assert.equal((await send({})).status, 200);
   assert.deepEqual(sent.map((b) => b.to), [["me@example.com"], ["everyone@example.com"]]);
 });
+
+test("resending an issue without to: the digest's recipients; a failed lookup or a deleted digest sends nothing", async () => {
+  const { env, store } = fakeEnv();
+  const sent: any[] = [];
+  const secrets: Record<string, string> = { AGENT_AUTH_KEY: KEY, DIGEST_EMAIL_FROM: "digest@example.com", DIGEST_EMAIL_TO: "everyone@example.com", PUBLIC_URL: ORIGIN };
+  (env as any).SECRETS = { get: async (n: string) => secrets[n] ?? "" };
+  (env as any).TELNYX = { post: async (_p: string, o: any) => (sent.push(o.body), { data: { id: "m1" } }) };
+  let profile = "agent-memory", lookupFails = false;
+  const actor = env.AI_DIGEST.idFromName;
+  (env as any).AI_DIGEST.idFromName = (name: string) => {
+    const a = actor(name);
+    return {
+      ...a,
+      issueRecord: async (id: string) => ({ id, profile, subject: "S", sentAt: "2026-11-16T00:00:00Z", items: [], html: "<p>x</p>" }),
+      getDigest: async (id: string) => { if (lookupFails) throw new Error("actor unavailable"); return a.getDigest(id); },
+    };
+  };
+  const send = async () => route(req("/v1/issues/x/send", { method: "POST", headers: await auth() }), env);
+  store.set("agent-memory", example.replace(/^to:.*$/m, "").replace(/^---\n/, "---\nto: team@example.com\n"));
+  assert.equal((await send()).status, 200);
+  lookupFails = true;
+  const failed = await send();
+  assert.equal(failed.status, 503);
+  assert.equal((await failed.json()).error, "digest_unavailable");
+  lookupFails = false;
+  store.delete("agent-memory");
+  const gone = await send();
+  assert.equal(gone.status, 409);
+  assert.equal((await gone.json()).error, "digest_gone");
+  profile = GENERAL_ID;
+  assert.equal((await send()).status, 200, "General issues go to DIGEST_EMAIL_TO");
+  assert.deepEqual(sent.map((b) => b.to), [["team@example.com"], ["everyone@example.com"]]);
+});

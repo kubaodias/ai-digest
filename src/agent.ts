@@ -15,10 +15,10 @@ import {
   type Candidate, type Decision, type PoolEntry, type RunLease, type Sighting,
 } from "./pool.ts";
 import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
-import { TALK_TTL_S, addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
+import { TALK_TTL_S, spendTalkTool, type TalkTool, type TalkUsage, addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
 import {
   FEEDBACK_CONVERSATION, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
-  nextVote, preferencesFrom, retainIssues, tagItems, TALK_UNTIL_SLACK_MS, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestRecord, type StoredVote,
+  nextVote, preferencesFrom, retainIssues, tagItems, TALK_UNTIL_SLACK_MS, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestItemRecord, type DigestRecord, type StoredVote,
 } from "./feedback.ts";
 
 // ai-digest: a research agent on Telnyx Edge Compute that writes email digests
@@ -765,7 +765,6 @@ export class AiDigest extends ManagedAgent {
     if (!key) return errorPage(503, "Feedback isn't configured.");
     const p = await verifyPayload(key, url.searchParams.get("p") ?? "", url.searchParams.get("s") ?? "");
     if (!p) return errorPage(400, "The link is invalid or has expired.");
-    const telnyx = this.agentEnv.TELNYX as any;
     const id = `${p.d}:${p.i}`;
     const state: any = await (this as any).getState();
     const digest: DigestRecord | undefined = state?.digests?.[p.d];
@@ -779,27 +778,11 @@ export class AiDigest extends ManagedAgent {
     const view = digest?.html ? await viewLink(key, base, p.d) : undefined;
     try {
       if (url.searchParams.get("undo") === "1") {
-        if (prior) {
-          await forgetVote(telnyx, profile, prior.memorySource).catch((err: unknown) => console.log(JSON.stringify({ feedback: "memory delete failed", error: String(err) })));
-          await (this as any).setState({ votes: { [id]: null } });
-          // Ingestion is asynchronous: a memory still being extracted can land after this delete. Delete again later.
-          if (prior.memorySource) await this.later(120, "forgetMemorySourceLater", { source: prior.memorySource, profile });
-        }
-        console.log(JSON.stringify({ feedback: "undo", id }));
+        await this.removeVote(id, prior, profile, "email");
         return undonePage(item?.headline ?? prior?.headline ?? "", view);
       }
       const { vote, changed } = nextVote(prior, p, item, new Date().toISOString());
-      vote.profile ??= profile;
-      if (digest?.topic) vote.topic ??= digest.topic;
-      await backfillEntities(telnyx, vote, item);
-      if (changed) {
-        vote.memorySource = await rememberVote(telnyx, profile, vote).catch((err: unknown) => {
-          console.log(JSON.stringify({ feedback: "memory write failed", error: String(err) }));
-          return prior?.memorySource;
-        });
-        await (this as any).setState({ votes: { [id]: vote } });
-      }
-      console.log(JSON.stringify({ feedback: "vote", id, vote: vote.vote, reasons: vote.reasons ?? [], entities: vote.entities, tags: vote.tags, changed }));
+      await this.saveVote(id, vote, prior, { profile, digest, item }, changed, "email");
       const votes = (Object.values({ ...(state?.votes ?? {}), [id]: vote }).filter(Boolean) as StoredVote[]).filter((v) => (v.profile ?? LEGACY_PROFILE) === profile);
       const pay = { d: p.d, i: p.i, v: p.v, e: p.e };
       const flip = await feedbackLink(key, base, { ...pay, v: p.v === "up" ? "down" : "up" });
@@ -816,6 +799,37 @@ export class AiDigest extends ManagedAgent {
       console.log(JSON.stringify({ feedback: "failed", id, error: err instanceof Error ? err.message : String(err) }));
       return errorPage(500, "Something went wrong recording that. Try again in a minute.");
     }
+  }
+
+  /**
+   * Save a vote, from the email's thumbs or the talk page alike: the digest (and General topic) it belongs to,
+   * the entity for an untargeted "I don't use X", then, when it changed, its Agent Memory source (the previous
+   * one is kept if that write fails) and the stored vote.
+   */
+  private async saveVote(id: string, vote: StoredVote, prior: StoredVote | undefined, ctx: { profile: string; digest?: DigestRecord; item?: DigestItemRecord }, write: boolean, via: string) {
+    const telnyx = this.agentEnv.TELNYX as any;
+    vote.profile ??= ctx.profile;
+    if (ctx.digest?.topic) vote.topic ??= ctx.digest.topic;
+    await backfillEntities(telnyx, vote, ctx.item);
+    if (write) {
+      vote.memorySource = await rememberVote(telnyx, ctx.profile, vote).catch((err: unknown) => {
+        console.log(JSON.stringify({ feedback: "memory write failed", via, id, error: String(err) }));
+        return prior?.memorySource;
+      });
+      await (this as any).setState({ votes: { [id]: vote } });
+    }
+    console.log(JSON.stringify({ feedback: "vote", via, id, vote: vote.vote, reasons: selectionsOf(vote), entities: vote.entities, tags: vote.tags, changed: write }));
+  }
+
+  /** Remove a vote (an undo, from the email or the talk page): its memory, the stored vote, and its memory again later. */
+  private async removeVote(id: string, prior: StoredVote | undefined, profile: string, via: string) {
+    if (prior) {
+      await forgetVote(this.agentEnv.TELNYX as any, profile, prior.memorySource).catch((err: unknown) => console.log(JSON.stringify({ feedback: "memory delete failed", via, id, error: String(err) })));
+      await (this as any).setState({ votes: { [id]: null } });
+      // Ingestion is asynchronous: a memory still being extracted can land after this delete. Delete again later.
+      if (prior.memorySource) await this.later(120, "forgetMemorySourceLater", { source: prior.memorySource, profile });
+    }
+    console.log(JSON.stringify({ feedback: "undo", via, id }));
   }
 
   /** Schedule one of the methods below; a failure to schedule is logged, never thrown at the reader. */
@@ -881,6 +895,31 @@ export class AiDigest extends ManagedAgent {
    * profile. A reason (r, and x for "entity") toggles on the current vote; undo removes the vote.
    * Called in-process by the router; not @rpc.
    */
+  /** Today's paid talk-tool use, loaded once per instance and shared, so concurrent checks see each other. */
+  private talkUse?: Promise<TalkUsage>;
+
+  /**
+   * Count one paid talk tool call (search_web, read_article) for an issue against the daily limits (TALK_LIMITS):
+   * undefined when allowed, else the refusal for the assistant. Called in-process by the router; not @rpc.
+   */
+  async spendTalkTool(issue: string, tool: TalkTool): Promise<string | undefined> {
+    this.talkUse ??= (async () => {
+      const state: any = await (this as any).getState();
+      return (state?.talkUse as TalkUsage | undefined) ?? { day: "", total: {}, issues: {} };
+    })();
+    const use = await this.talkUse;
+    const before = use.day;
+    // Checked and counted with no await in between: concurrent calls can't both take the last one.
+    const refused = spendTalkTool(use, issue, tool);
+    if (refused) console.log(JSON.stringify({ talk: "tool limit", tool, issue, day: use.day }));
+    else {
+      // A new day starts from nothing: clear the stored counts first (setState merges objects).
+      if (before && before !== use.day) await (this as any).setState({ talkUse: null });
+      await (this as any).setState({ talkUse: structuredClone(use) });
+    }
+    return refused;
+  }
+
   async talkVote(p: { d: string; i: number; v: "up" | "down"; r?: string; x?: number; undo?: boolean; via?: string }) {
     const state: any = await (this as any).getState();
     const digest: DigestRecord | undefined = state?.digests?.[p.d];
@@ -889,14 +928,8 @@ export class AiDigest extends ManagedAgent {
     const id = `${p.d}:${p.i}`;
     const prior: StoredVote | undefined = state?.votes?.[id];
     const profile = digest.profile ?? prior?.profile ?? LEGACY_PROFILE;
-    const telnyx = this.agentEnv.TELNYX as any;
     if (p.undo) {
-      if (prior) {
-        await forgetVote(telnyx, profile, prior.memorySource).catch(() => undefined);
-        await (this as any).setState({ votes: { [id]: null } });
-        if (prior.memorySource) await this.later(120, "forgetMemorySourceLater", { source: prior.memorySource, profile });
-      }
-      console.log(JSON.stringify({ feedback: "undo", via: p.via ?? "talk", id }));
+      await this.removeVote(id, prior, profile, p.via ?? "talk");
       return { ok: true, story: p.i, vote: null, reasons: [] };
     }
     const reason = p.r && validReason(p.v, p.r) ? (p.r as any) : undefined;
@@ -905,17 +938,8 @@ export class AiDigest extends ManagedAgent {
     let base = prior;
     if (reason && (!prior || prior.vote !== p.v)) base = nextVote(prior, { d: p.d, i: p.i, v: p.v, e: 0 }, item, new Date().toISOString()).vote;
     const { vote, changed } = nextVote(base, { d: p.d, i: p.i, v: p.v, e: 0, ...(reason ? { r: reason } : {}), ...(x !== undefined ? { x } : {}) }, item, new Date().toISOString());
-    vote.profile ??= profile;
-    if (digest.topic) vote.topic ??= digest.topic;
-    await backfillEntities(telnyx, vote, item);
-    if (changed || base !== prior) {
-      vote.memorySource = await rememberVote(telnyx, profile, vote).catch((err: unknown) => {
-        console.log(JSON.stringify({ feedback: "memory write failed", error: String(err) }));
-        return prior?.memorySource;
-      });
-      await (this as any).setState({ votes: { [id]: vote } });
-    }
-    console.log(JSON.stringify({ feedback: "vote", via: p.via ?? "talk", id, vote: vote.vote, reasons: selectionsOf(vote), changed }));
+    // A vote cast here only to carry a reason is new even when the reason toggled nothing.
+    await this.saveVote(id, vote, prior, { profile, digest, item }, changed || base !== prior, p.via ?? "talk");
     return { ok: true, story: p.i, vote: vote.vote, reasons: selectionsOf(vote), headline: item.headline };
   }
 
