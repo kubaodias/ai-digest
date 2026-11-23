@@ -120,3 +120,24 @@ test("talk page: the issue's HTML is data, not markup; only the page's own scrip
   const again = talkPage({ token: "tok", assistantId: "a", record, body, votes: {}, autostart: false });
   assert.notEqual(again.headers.get("content-security-policy"), csp);
 });
+
+test("talk page: the page's script parses as a module (it ships as a string no other test runs)", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const { talkPage } = await import("../src/talk-page.ts");
+  const record = { id: "d1", subject: "Weekly", sentAt: "2026-11-16T08:00:00Z", items: [{ n: 1, headline: "A story", why: "w", entities: ["acme"], tags: ["t"] }] } as unknown as DigestRecord;
+  const html = await talkPage({ token: "tok", assistantId: "a", record, body: "<h2>1. A story</h2>", votes: {}, start: 1 }).text();
+  const script = html.match(/<script type="module" nonce="[^"]+">([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script && script.includes("function cleanHtml("), "the module script, with the sanitizer in it");
+  const dir = mkdtempSync(join(tmpdir(), "talk-page-"));
+  try {
+    const file = join(dir, "page.mjs");
+    writeFileSync(file, script);
+    const r = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
