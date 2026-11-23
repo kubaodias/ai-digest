@@ -14,7 +14,7 @@
 // topic preferences, and shares explicit entity reasons between digests;
 // `reader_preferences` hands them to the model.
 
-import { digestSections } from "./images.ts";
+import { digestSections } from "./digest.ts";
 import {
   computePreferences, memorySentence, reasonLabel, selectionsOf, toggleSelection, validEntityIndex, validReason, DOWN_REASONS, ENTITY_OPTIONS, UP_REASONS,
   type Preferences, type Reason, type Selection,

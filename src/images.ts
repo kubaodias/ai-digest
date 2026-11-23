@@ -4,6 +4,8 @@
 // each one actually shows something relevant to the headline. Only images that
 // pass are kept, at most two per item.
 
+import { digestSections, type Section } from "./digest.ts";
+
 /** The vision model: hosted by Telnyx, accepts base64 images (checked: Qwen3.8-27B answers in ~2 s). */
 export const VISION_MODEL = "Qwen/Qwen3.8-27B";
 /** Who the pictures should help, when the digest doesn't say. */
@@ -393,28 +395,6 @@ export function distinctPicks<T extends { url: string; shape?: string; og?: bool
 }
 
 // ── the digest ───────────────────────────────────────────────────────────────
-
-interface Section {
-  start: number;
-  end: number;
-  headline: string;
-  context: string;
-  links: string[];
-}
-
-/** The digest's numbered items ("## 1. …"), each with its headline, "Why it matters" text and links in order. */
-export function digestSections(markdown: string): Section[] {
-  const heads = [...markdown.matchAll(/^##\s+\d+\.\s+(.+)$/gm)];
-  return heads.map((h, i) => {
-    const start = h.index!;
-    const nextHeading = markdown.slice(start + h[0].length).search(/^##\s/m);
-    const end = nextHeading === -1 ? markdown.length : start + h[0].length + nextHeading;
-    const block = markdown.slice(start, end);
-    const context = block.match(/\*\*Why it matters:\*\*\s*(.+)/)?.[1]?.trim() ?? "";
-    const links = [...block.matchAll(/(?<!!)\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g)].map((m) => m[1]!).filter((u) => !/reddit\.com|lobste\.rs|x\.com|twitter\.com|news\.ycombinator\.com\/(?!item)/i.test(u));
-    return { start, end, headline: h[1]!.trim(), context, links };
-  });
-}
 
 /** An HN discussion link → the story it points to (HN pages themselves have no pictures). */
 async function resolveArticle(link: string): Promise<string | undefined> {

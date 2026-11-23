@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { digestSections, dimensions, distinctImages, distinctPicks, extractCandidates, imageKey, rasterUrl, stableUrl, usable } from "../src/images.ts";
+import { dimensions, distinctImages, distinctPicks, extractCandidates, imageKey, rasterUrl, stableUrl, usable } from "../src/images.ts";
+import { digestSections } from "../src/digest.ts";
 
 test("imageKey: one picture at any size is one key; different pictures stay apart", () => {
   const base = "https://static.example.com/story-media/123/HWbLl";
