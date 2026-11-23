@@ -113,8 +113,4 @@ export function run(cmd, args, { cwd = root, quiet = false } = {}) {
   return r.stdout ?? "";
 }
 
-export function readJson(file) {
-  return JSON.parse(readFileSync(join(root, file), "utf8"));
-}
-
 export const say = (msg) => console.log(`\n▸ ${msg}`);

@@ -30,7 +30,7 @@ import { GENERAL_ID, ID_PATTERN, ProfileError, generalProfile, parseProfile, run
 import { GENERAL_TEMPLATE } from "./general.ts";
 import { app } from "./app.ts";
 import { parseRecipients } from "./config.ts";
-import { TALK_TTL_S, addTalkLinks, readArticle, rebaseLinks, searchWeb, talkBase, talkLinks, talkToken, verifyTalkToken } from "./talk.ts";
+import { TALK_TTL_S, addTalkLinks, hasTalkLinks, issueTalkLink, readArticle, rebaseLinks, searchWeb, talkBase, talkLinks, talkToken, verifyTalkToken } from "./talk.ts";
 import { verifyPayload, verifyView } from "./feedback.ts";
 import { emailBody, talkPage } from "./talk-page.ts";
 
@@ -260,17 +260,17 @@ async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<R
   }
   let html = rebaseLinks(record.html, publicUrl);
   if (key && assistantId) {
-    const had = html.includes("/v1/talk?t=");
-    html = addTalkLinks(html, await talkLinks(key, talkBase(publicUrl), id, record.items));
     // New links last TALK_TTL_S from now: keep the issue that long.
-    const added = !had && html.includes("/v1/talk?t=");
+    const added = !hasTalkLinks(html);
+    if (added) html = addTalkLinks(html, await talkLinks(key, talkBase(publicUrl), id, record.items));
     if (html !== record.html) await feedback.setIssueHtml(id, html, added ? new Date(Date.now() + TALK_TTL_S * 1000).toISOString() : undefined);
   }
-  const text = `${record.subject}\n\nThis digest is best read as HTML.${html.includes("/v1/talk?t=") ? `\n\n🎧 Talk about this issue: ${html.match(/href="([^"]*\/v1\/talk\?t=[^"]*)"/)?.[1] ?? ""}` : ""}`;
+  const talk = hasTalkLinks(html);
+  const text = `${record.subject}\n\nThis digest is best read as HTML.${talk ? `\n\n🎧 Talk about this issue: ${issueTalkLink(html) ?? ""}` : ""}`;
   const res: any = await env.TELNYX.post("/emails", { body: { from, to: recipients, subject: record.subject, text_body: text, html_body: html } });
   const data = res?.data ?? res;
-  console.log(JSON.stringify({ issue: "resent", id, recipients: recipients.length, talk: html.includes("/v1/talk?t="), email: data?.id }));
-  return json(200, { issue: id, recipients: recipients.length, talkLinks: html.includes("/v1/talk?t="), email: data?.id ?? null, status: data?.status ?? null });
+  console.log(JSON.stringify({ issue: "resent", id, recipients: recipients.length, talk, email: data?.id }));
+  return json(200, { issue: id, recipients: recipients.length, talkLinks: talk, email: data?.id ?? null, status: data?.status ?? null });
 }
 
 /** How the built-in General digest appears in GET /v1/digests. */

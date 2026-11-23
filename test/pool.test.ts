@@ -168,8 +168,8 @@ const live = (n: number, score: number) => Array.from({ length: n }, (_, k) => e
 test("decide: enough strong stories and the minimum gap → an issue of the strongest", () => {
   const d = decide([...live(3, 8), ...live(4, 5)], S, ago(3), NOW, 5);
   assert.equal(d.action, "issue");
-  if (d.action !== "none") assert.deepEqual(d.ids.slice(0, 3), ["s8-0", "s8-1", "s8-2"]);
-  if (d.action !== "none") assert.equal(d.ids.length, 5, "filled up to items with the next best");
+  assert.deepEqual(d.ids.slice(0, 3), ["s8-0", "s8-1", "s8-2"]);
+  assert.equal(d.ids.length, 5, "filled up to items with the next best");
 });
 
 test("decide: the minimum gap holds an issue back", () => {
@@ -188,10 +188,10 @@ test("decide: too few strong stories → nothing yet, with the reason and the la
 test("decide: the maximum gap sends anyway, whatever the pool holds, even nothing", () => {
   const d = decide(live(2, 4), S, ago(7), NOW, 5);
   assert.equal(d.action, "issue-anyway");
-  if (d.action !== "none") assert.equal(d.ids.length, 2);
+  assert.equal(d.ids.length, 2);
   const empty = decide([], S, ago(8), NOW, 5);
   assert.equal(empty.action, "issue-anyway");
-  if (empty.action !== "none") assert.deepEqual(empty.ids, []);
+  assert.deepEqual(empty.ids, []);
 });
 
 test("decide: only live candidates count; force sends what there is", () => {
@@ -199,7 +199,7 @@ test("decide: only live candidates count; force sends what there is", () => {
   assert.equal(decide(pool, S, ago(3), NOW, 5).action, "none");
   const f = decide(pool, S, ago(0), NOW, 5, true);
   assert.equal(f.action, "issue");
-  if (f.action !== "none") assert.equal(f.ids.length, 1);
+  assert.equal(f.ids.length, 1);
 });
 
 // ── the requests ──
@@ -257,12 +257,14 @@ test("seen: known stories found again count as sightings, with new sources; unkn
 test("floor: forced and max_gap issues leave out weak stories, unless nothing reaches the floor", () => {
   const pool = [...live(2, 8), ...live(2, FLOOR), ...live(3, 3)];
   const f = decide(pool, S, ago(0), NOW, 10, true);
-  if (f.action !== "none") assert.deepEqual(f.ids.length, 4, "only stories scoring 5+");
+  assert.ok(f.action !== "none", "a forced issue");
+  assert.equal(f.ids.length, 4, "only stories scoring 5+");
   const a = decide(pool, S, ago(8), NOW, 10);
   assert.equal(a.action, "issue-anyway");
-  if (a.action !== "none") assert.equal(a.ids.length, 4);
+  assert.equal(a.ids.length, 4);
   const weak = decide(live(5, 2), S, ago(8), NOW, 10);
-  if (weak.action !== "none") assert.equal(weak.ids.length, 3, "nothing reaches the floor: the best three anyway");
+  assert.equal(weak.action, "issue-anyway");
+  assert.equal(weak.ids.length, 3, "nothing reaches the floor: the best three anyway");
   const t = decide([...live(3, 8), ...live(3, 4)], S, ago(3), NOW, 10);
   if (t.action !== "none") assert.equal(t.ids.length, 3, "a threshold issue isn't padded with weak stories either");
 });
