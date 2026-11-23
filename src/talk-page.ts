@@ -3,8 +3,10 @@
 // story gets 👍/👎 with reasons and a "Discuss" button; while a conversation
 // is live, Discuss switches it to that story without reconnecting.
 
-import { b64url, esc, type DigestRecord } from "./feedback.ts";
-import { DOWN_REASONS, ENTITY_OPTIONS, UP_REASONS, reasonLabel } from "./preferences.ts";
+import type { DigestRecord } from "./feedback.ts";
+import { esc } from "./pages.ts";
+import { b64url } from "./signing.ts";
+import { DOWN_REASONS, ENTITY_OPTIONS, UP_REASONS, reasonLabel, type DownReason, type UpReason } from "./preferences.ts";
 import { AGENT_LIB, headerValue, issueBrief } from "./talk.ts";
 import { talkGreeting } from "./talk-instructions.ts";
 import { ISSUE_END, ISSUE_START } from "./email.ts";
@@ -44,11 +46,11 @@ function bodyFromItems(record: DigestRecord): string {
 
 /** The reason chips for each vote, as on the feedback page. */
 function reasonOptions(entities: string[], tags: string[]) {
-  const opts = (vote: "up" | "down", list: readonly string[]) =>
+  const opts = (vote: "up" | "down", list: readonly (UpReason | DownReason)[]) =>
     list.flatMap((r) =>
       r === "entity" && entities.length
-        ? entities.slice(0, ENTITY_OPTIONS).map((e, x) => ({ r, x, target: e, label: reasonLabel(vote, r as any, [e], tags) }))
-        : [{ r, label: reasonLabel(vote, r as any, entities, tags) }],
+        ? entities.slice(0, ENTITY_OPTIONS).map((e, x) => ({ r, x, target: e, label: reasonLabel(vote, r, [e], tags) }))
+        : [{ r, label: reasonLabel(vote, r, entities, tags) }],
     );
   return { up: opts("up", UP_REASONS), down: opts("down", DOWN_REASONS) };
 }

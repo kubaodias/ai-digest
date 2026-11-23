@@ -14,6 +14,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - Internal: the email template and sending (`src/email.ts`) and delivering a finished digest (`src/delivery.ts`) moved out of the agent class's file; every email goes through one `sendEmail`. No change in what is sent.
 - Internal: the actors' state, the calls between actors and from the router to them are typed (`src/actor-state.ts`, `src/actors.ts`), so the type check covers them.
+- Internal: `src/feedback.ts` split into feedback records and links, the thumbs pages (`src/feedback-pages.ts`), Agent Memory (`src/memory.ts`), link signing (`src/signing.ts`) and the shared page frame (`src/pages.ts`); one TELNYX client type (`src/telnyx.ts`).
 
 ### Fixed
 

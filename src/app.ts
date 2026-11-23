@@ -11,7 +11,10 @@
 //   GET  /v1/app/sign-out
 
 import { marked } from "marked";
-import { esc, errorPage, page, viewLink } from "./feedback.ts";
+import { viewLink } from "./feedback.ts";
+import { errorPage } from "./feedback-pages.ts";
+import { esc, page } from "./pages.ts";
+import { b64url, fromB64url } from "./signing.ts";
 import type { Preferences } from "./preferences.ts";
 import { GENERAL_ID, generalProfile, isDigestId, parseProfile, type DigestProfile } from "./profile.ts";
 import { GENERAL_TEMPLATE } from "./general.ts";
@@ -24,8 +27,6 @@ const APP = "/v1/app";
 
 // ── tokens ───────────────────────────────────────────────────────────────────
 
-const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const fromB64url = (s: string) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
 
 async function mac(key: string, purpose: string, data: string): Promise<string> {
   const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

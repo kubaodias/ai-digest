@@ -2,6 +2,7 @@
 // sending mail through the Telnyx email API.
 
 import { marked } from "marked";
+import type { TelnyxPoster } from "./telnyx.ts";
 
 /** The footer logo (the Telnyx mark, 200x200 PNG). */
 const LOGO_URL = "https://www.activepieces.com/piece-icon/telnyx";
@@ -55,16 +56,11 @@ export interface Mail {
   html: string;
 }
 
-/** What sending needs of the TELNYX binding. */
-export interface EmailPoster {
-  post(path: string, opts: { body: unknown }): Promise<unknown>;
-}
-
 /**
  * Send one email; resolves to the API's record of it (its id and status), throws when the API refuses.
  * The API wants `to` as an array and the bodies as text_body / html_body (unknown fields are silently dropped).
  */
-export async function sendEmail(telnyx: EmailPoster, mail: Mail): Promise<{ id?: string; status?: string } | undefined> {
+export async function sendEmail(telnyx: TelnyxPoster, mail: Mail): Promise<{ id?: string; status?: string } | undefined> {
   const res: any = await telnyx.post("/emails", { body: { from: mail.from, to: mail.to, subject: mail.subject, text_body: mail.text, html_body: mail.html } });
   return res?.data ?? res;
 }

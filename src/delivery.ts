@@ -8,6 +8,7 @@ import { renderEmailHtml, sendEmail } from "./email.ts";
 import { addFeedbackLinks, feedbackBase, type DigestRecord } from "./feedback.ts";
 import { addImages } from "./images.ts";
 import { audienceOf, type DigestProfile } from "./profile.ts";
+import { telnyxOf } from "./telnyx.ts";
 import { addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
 
 /** How sending a digest went: the email's id and status from the API, or why nothing was sent. */
@@ -21,7 +22,7 @@ export async function sendDigestEmail(
   { subject, markdown, profileId, profile }: { subject: string; markdown: string; profileId: string; profile?: DigestProfile },
 ): Promise<Delivery> {
   const started = Date.now();
-  const telnyx = env.TELNYX as any;
+  const telnyx = env.TELNYX ? telnyxOf(env) : undefined;
   if (!telnyx) return { ok: false, error: "no TELNYX binding" };
   const { config, missing } = await loadConfig(env);
   if (!config) return { ok: false, error: `missing secrets: ${missing.join(", ")} (telnyx-acp add secret NAME)` };
