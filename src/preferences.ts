@@ -33,6 +33,14 @@ export type Reason = DownReason | UpReason | LegacyReason;
 export const DOWN_REASONS: readonly DownReason[] = ["entity", "topic", "known"];
 export const UP_REASONS: readonly UpReason[] = ["topic", "entity"];
 
+/** How many of a story's entities get their own "entity" reason option (x = 0..ENTITY_OPTIONS-1). */
+export const ENTITY_OPTIONS = 3;
+
+/** An entity option's index, as a link or the talk page sends it. */
+export function validEntityIndex(x: unknown): x is number {
+  return Number.isInteger(x) && (x as number) >= 0 && (x as number) < ENTITY_OPTIONS;
+}
+
 export function validReason(vote: Vote, r: unknown): r is Reason {
   return typeof r === "string" && (vote === "down" ? (DOWN_REASONS as readonly string[]) : (UP_REASONS as readonly string[])).includes(r);
 }

@@ -303,3 +303,58 @@ test("a run of a watching digest writes from the pool: after a check, or right a
   assert.equal(calls.at(-1)!.method, "writeNow");
   assert.equal(calls.filter((c) => c.method === "receive").length, 0, "no direct research run");
 });
+
+test("resending an issue: recipients given are used as given, a mistyped one is refused (never the default audience)", async () => {
+  const { env } = fakeEnv();
+  const sent: any[] = [];
+  const secrets: Record<string, string> = { AGENT_AUTH_KEY: KEY, DIGEST_EMAIL_FROM: "digest@example.com", DIGEST_EMAIL_TO: "everyone@example.com", PUBLIC_URL: ORIGIN };
+  (env as any).SECRETS = { get: async (n: string) => secrets[n] ?? "" };
+  (env as any).TELNYX = { post: async (_p: string, o: any) => (sent.push(o.body), { data: { id: "m1" } }) };
+  const actor = env.AI_DIGEST.idFromName;
+  (env as any).AI_DIGEST.idFromName = (name: string) => ({ ...actor(name), issueRecord: async (id: string) => ({ id, subject: "S", sentAt: "2026-11-16T00:00:00Z", items: [], html: "<p>x</p>" }) });
+  const send = async (body: unknown) => route(req("/v1/issues/x/send", { method: "POST", headers: { ...(await auth()), "content-type": "application/json" }, body: JSON.stringify(body) }), env);
+  for (const body of [{ to: ["mistyped-address"] }, { to: ["me@example.com", "nope"] }, { to: [] }, { to: "nope" }, { to: ["me@example.com, mistyped-address"] }, { to: [" "] }, { to: [","] }, { to: ";" }, { to: [42] }, { to: null }, { to: "" }]) {
+    const r = await send(body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.equal((await r.json()).error, "invalid_recipients");
+  }
+  const bad = await route(req("/v1/issues/x/send", { method: "POST", headers: { ...(await auth()), "content-type": "application/json" }, body: '{"to":["me@example.com"],}' }), env);
+  assert.equal(bad.status, 400, "malformed JSON is refused, not read as no recipients");
+  assert.equal(sent.length, 0);
+  assert.equal((await send({ to: "me@example.com" })).status, 200);
+  assert.equal((await send({})).status, 200);
+  assert.deepEqual(sent.map((b) => b.to), [["me@example.com"], ["everyone@example.com"]]);
+});
+
+test("resending an issue without to: the digest's recipients; a failed lookup or a deleted digest sends nothing", async () => {
+  const { env, store } = fakeEnv();
+  const sent: any[] = [];
+  const secrets: Record<string, string> = { AGENT_AUTH_KEY: KEY, DIGEST_EMAIL_FROM: "digest@example.com", DIGEST_EMAIL_TO: "everyone@example.com", PUBLIC_URL: ORIGIN };
+  (env as any).SECRETS = { get: async (n: string) => secrets[n] ?? "" };
+  (env as any).TELNYX = { post: async (_p: string, o: any) => (sent.push(o.body), { data: { id: "m1" } }) };
+  let profile = "agent-memory", lookupFails = false;
+  const actor = env.AI_DIGEST.idFromName;
+  (env as any).AI_DIGEST.idFromName = (name: string) => {
+    const a = actor(name);
+    return {
+      ...a,
+      issueRecord: async (id: string) => ({ id, profile, subject: "S", sentAt: "2026-11-16T00:00:00Z", items: [], html: "<p>x</p>" }),
+      getDigest: async (id: string) => { if (lookupFails) throw new Error("actor unavailable"); return a.getDigest(id); },
+    };
+  };
+  const send = async () => route(req("/v1/issues/x/send", { method: "POST", headers: await auth() }), env);
+  store.set("agent-memory", example.replace(/^to:.*$/m, "").replace(/^---\n/, "---\nto: team@example.com\n"));
+  assert.equal((await send()).status, 200);
+  lookupFails = true;
+  const failed = await send();
+  assert.equal(failed.status, 503);
+  assert.equal((await failed.json()).error, "digest_unavailable");
+  lookupFails = false;
+  store.delete("agent-memory");
+  const gone = await send();
+  assert.equal(gone.status, 409);
+  assert.equal((await gone.json()).error, "digest_gone");
+  profile = GENERAL_ID;
+  assert.equal((await send()).status, 200, "General issues go to DIGEST_EMAIL_TO");
+  assert.deepEqual(sent.map((b) => b.to), [["team@example.com"], ["everyone@example.com"]]);
+});

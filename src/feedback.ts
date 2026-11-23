@@ -16,7 +16,7 @@
 
 import { digestSections } from "./images.ts";
 import {
-  computePreferences, memorySentence, reasonLabel, selectionsOf, toggleSelection, validReason, DOWN_REASONS, UP_REASONS,
+  computePreferences, memorySentence, reasonLabel, selectionsOf, toggleSelection, validEntityIndex, validReason, DOWN_REASONS, ENTITY_OPTIONS, UP_REASONS,
   type Preferences, type Reason, type Selection,
 } from "./preferences.ts";
 
@@ -37,6 +37,27 @@ export function assetUrl(base: string, name: string): string {
 const LINK_TTL_S = 90 * 24 * 3600;
 /** How many past digests the feedback actor keeps (with their email HTML). */
 export const KEEP_DIGESTS = 12;
+/** How many past issues it keeps at most (older than KEEP_DIGESTS without their HTML, and only while their talk links last). */
+export const KEEP_ISSUES = 200;
+/** How far talkUntil may lag behind the newest link: keepIssueUntil skips smaller moves, so retention adds this much. */
+export const TALK_UNTIL_SLACK_MS = 86400_000;
+
+/**
+ * What to change in the stored issues when a new one is kept: the newest KEEP_DIGESTS stay as they are;
+ * older ones lose their HTML and stay while their talk links are valid (ttlMs after sending, or until
+ * talkUntil plus TALK_UNTIL_SLACK_MS), up to KEEP_ISSUES in all. `older` excludes the new issue. null drops an issue.
+ */
+export function retainIssues(older: DigestRecord[], now: number, ttlMs: number): Record<string, DigestRecord | null> {
+  const out: Record<string, DigestRecord | null> = {};
+  const until = (d: DigestRecord) => Math.max(Date.parse(d.sentAt) + ttlMs, d.talkUntil ? Date.parse(d.talkUntil) + TALK_UNTIL_SLACK_MS : 0);
+  [...older].sort((a, b) => b.sentAt.localeCompare(a.sentAt)).forEach((d, i) => {
+    const n = i + 1; // the new issue is first
+    if (n < KEEP_DIGESTS) return;
+    if (n >= KEEP_ISSUES || now > until(d)) out[d.id] = null;
+    else if (d.html) out[d.id] = { ...d, html: "" };
+  });
+  return out;
+}
 const TAG_MODEL = "Qwen/Qwen3.8-27B";
 
 export type Vote = "up" | "down";
@@ -75,6 +96,8 @@ export interface DigestRecord {
   items: DigestItemRecord[];
   /** The email's HTML, served as the digest's web view. */
   html?: string;
+  /** When talk links added after sending (a resend) expire; the issue is kept until then. */
+  talkUntil?: string;
 }
 
 export interface StoredVote {
@@ -107,10 +130,10 @@ export interface TelnyxClient {
 
 // ── signing ──────────────────────────────────────────────────────────────────
 
-const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const fromB64url = (s: string) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+export const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+export const fromB64url = (s: string) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
 
-async function hmac(key: string, data: string): Promise<string> {
+export async function hmac(key: string, data: string): Promise<string> {
   const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = new Uint8Array(await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(data)));
   return b64url(sig.subarray(0, 18));
@@ -123,7 +146,7 @@ export async function verifyPayload(key: string, encoded: string, sig: string): 
     if ((p.v !== "up" && p.v !== "down") || typeof p.d !== "string" || typeof p.i !== "number") return undefined;
     if (p.e < Date.now() / 1000) return undefined;
     if (p.r !== undefined && !validReason(p.v, p.r)) return undefined;
-    if (p.x !== undefined && (p.r !== "entity" || !Number.isInteger(p.x) || p.x < 0 || p.x > 2)) return undefined;
+    if (p.x !== undefined && (p.r !== "entity" || !validEntityIndex(p.x))) return undefined;
     return { d: p.d, i: p.i, v: p.v, e: p.e, ...(p.r ? { r: p.r } : {}), ...(p.x !== undefined ? { x: p.x } : {}) };
   } catch {
     return undefined;
@@ -209,7 +232,7 @@ export async function tagItems(telnyx: TelnyxClient, items: { headline: string; 
 }
 
 /** The thumbs row closing each item: grey outline icons with a small label, left-aligned and spaced away from any image above. */
-function thumbsRow(base: string, up: string, down: string): string {
+export function thumbsRow(base: string, up: string, down: string): string {
   const icon = (href: string, name: string, label: string) =>
     `<a style="text-decoration:none;display:inline-block;padding:2px 4px;vertical-align:middle;" href="${href}" title="${label}" aria-label="${label}"><img src="${assetUrl(base, name)}" width="16" height="16" alt="${label}" style="display:block;width:16px;height:16px;border:0;"></a>`;
   return `\n\n<div style="margin:14px 0 0;line-height:16px;font-size:12px;color:#9ca3af;"><span style="vertical-align:middle;padding-right:4px;">Useful?</span>${icon(up, "thumb-up.png", "More like this")}${icon(down, "thumb-down.png", "Less like this")}</div>\n\n`;
@@ -368,7 +391,7 @@ export interface ThanksContext {
   item?: DigestItemRecord;
   digest?: DigestRecord;
   prefs: Preferences;
-  /** Reason links by option: "entity:0".."entity:2" (one per entity), "entity" (no entities known), "topic", "known". */
+  /** Reason links by option: "entity:0".."entity:<ENTITY_OPTIONS-1>" (one per entity), "entity" (no entities known), "topic", "known". */
   links: { undo: string; flip: string; view?: string; reasons: Record<string, string> };
 }
 
@@ -406,7 +429,7 @@ export function thanksPage(c: ThanksContext): Response {
   const options: { key: string; label: string; on: boolean }[] = [];
   for (const r of up ? UP_REASONS : DOWN_REASONS) {
     if (r === "entity") {
-      entities.slice(0, 3).forEach((e, k) => {
+      entities.slice(0, ENTITY_OPTIONS).forEach((e, k) => {
         if (c.links.reasons[`entity:${k}`]) options.push({ key: `entity:${k}`, label: reasonLabel(c.vote.vote, r, [e], tags), on: sels.some((x) => x.r === "entity" && (x.target ?? entities[0]) === e) });
       });
       if (!entities.length && c.links.reasons.entity) options.push({ key: "entity", label: reasonLabel(c.vote.vote, r, [], tags), on: sels.some((x) => x.r === "entity") });

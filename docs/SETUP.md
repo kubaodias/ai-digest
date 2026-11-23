@@ -118,7 +118,8 @@ ai-digest deploy
 This:
 1. runs the tests;
 2. on the first run, registers the function on Edge Compute (`telnyx-edge new-func`);
-3. stores your settings as secrets, creating `AGENT_AUTH_KEY` (written to `.env`) and `FEEDBACK_KEY`;
+3. stores your settings as secrets, creating `AGENT_AUTH_KEY` (written to `.env`) and `FEEDBACK_KEY`. Secrets belong to the whole Telnyx account, so they're named with the function's prefix (`AI_DIGEST_PUBLIC_URL`, …) and can't clash with another project's;
+   then it creates or updates the voice assistant behind the "Talk about this issue" links (`TALK=off` in `.env` leaves it out);
 4. builds the function from `src/index.ts` and ships it (`telnyx-edge ship`); the first build takes a few minutes;
 5. records the function's public URL in `.edge/function.json` (git-ignored) and, the first time, ships again so the links in emails point to it;
 6. pushes your `digests/*.md`;
