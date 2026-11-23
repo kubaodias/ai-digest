@@ -5,13 +5,14 @@ Context for a coding agent working in this repository: an AI agent on Telnyx Edg
 | file | what it is | who changes it |
 |---|---|---|
 | `src/index.ts`, `src/router.ts` | The function's entry point and the v1 API (the only HTTP surface) | you |
+| `src/talk-routes.ts`, `src/resend.ts`, `src/http.ts` | Parts of the v1 API: the talk page and its tools; resending an issue; JSON and icon responses | you |
 | `src/agent.ts` | The agent class: runs (the post-run hook, web tool budgets, the front door), delegating each actor role by method name | you |
 | `src/pool-actor.ts`, `src/feedback-actor.ts`, `src/digests-actor.ts` | The actor roles: a watching digest's pool; votes and sent issues; definitions, the run lease and queued email | you |
 | `src/email.ts`, `src/delivery.ts`, `src/actors.ts`, `src/actor-state.ts` | The email template and sending; delivering a finished digest (pictures, thumbs and talk links, registering the issue); the actors by name; what each actor role keeps in its state | you |
 | `src/profile.ts` | Digest definitions: parsing, validation, the run request | you |
 | `src/instructions.ts` | How the research model researches and writes any digest | you |
 | `src/pool.ts`, `src/watch-instructions.ts` | Watching digests (`watch:`): the candidate pool, scoring and send decisions; the check and issue-writing requests | you |
-| `src/talk.ts`, `src/talk-instructions.ts`, `scripts/assistant.mjs` | Talking about an issue: signed links, the browser page and its tools; the voice assistant's prompt; creating the assistant on deploy | you |
+| `src/talk.ts`, `src/talk-page.ts`, `src/talk-client.ts`, `src/talk-instructions.ts`, `scripts/assistant.mjs` | Talking about an issue: signed links and the tools; the page; its browser side (styles, sanitizer, script); the voice assistant's prompt; creating the assistant on deploy | you |
 | `src/general.ts` | The built-in General digest's template (one-off topics, `ai-digest ask`) | you |
 | `src/feedback.ts`, `src/feedback-pages.ts`, `src/memory.ts`, `src/signing.ts`, `src/pages.ts`, `src/telnyx.ts` | Feedback: issue and vote records, thumbs links, tagging; the pages a thumbs click opens; Agent Memory; link signing; the shared page frame; the TELNYX client type | you |
 | `src/images.ts`, `src/preferences.ts`, `src/digest.ts`, `src/config.ts`, `src/auth.ts` | Pictures, preference scoring, digest detection, settings from secrets, the operator token | you |

@@ -23,20 +23,19 @@
 //
 //   GET    /agents/ai-digest/feedback?…   signed links     same as /v1/feedback (links in emails sent before 0.2.0)
 
+import { DIGESTS_CONVERSATION, FEEDBACK_CONVERSATION, poolConversation, type ActorNamespace } from "./actors.ts";
+import { app } from "./app.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
 import { mayUseFrontDoor } from "./auth.ts";
-import { SECRET, secret, type SecretStore } from "./config.ts";
-import { GENERAL_ID, ID_PATTERN, ProfileError, generalProfile, parseProfile, runConversation, runMessage } from "./profile.ts";
-import { GENERAL_TEMPLATE } from "./general.ts";
-import { app } from "./app.ts";
-import { parseRecipients } from "./config.ts";
-import { TALK_TTL_S, addTalkLinks, hasTalkLinks, issueTalkLink, readArticle, rebaseLinks, searchWeb, talkBase, talkLinks, talkToken, verifyTalkToken } from "./talk.ts";
-import { verifyPayload, verifyView, type DigestRecord } from "./feedback.ts";
-import { emailBody, talkPage } from "./talk-page.ts";
+import { SECRET, parseRecipients, secret, type SecretStore } from "./config.ts";
 import { sendEmail } from "./email.ts";
+import { GENERAL_TEMPLATE } from "./general.ts";
+import { json, png } from "./http.ts";
 import { memoryCounts, memorySummaryNow } from "./memory.ts";
-import type { TelnyxClient, TelnyxPoster } from "./telnyx.ts";
-import { DIGESTS_CONVERSATION, FEEDBACK_CONVERSATION, poolConversation, type ActorNamespace } from "./actors.ts";
+import { GENERAL_ID, ID_PATTERN, ProfileError, generalProfile, parseProfile, runConversation, runMessage } from "./profile.ts";
+import { resendIssue } from "./resend.ts";
+import { issuePageFor, talkRoute } from "./talk-routes.ts";
+import type { TelnyxClient } from "./telnyx.ts";
 
 export const VERSION = "0.6.2";
 
@@ -77,11 +76,6 @@ async function appRoute(req: Request, env: RouterEnv): Promise<Response> {
   });
 }
 
-const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body, null, 2) + "\n", { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
-const png = (b64: string) =>
-  new Response(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { headers: { "content-type": "image/png", "cache-control": "public, max-age=2592000" } });
-
 /**
  * Conversation names a watching digest uses itself ("<id>--pool", "<id>--check-…", "<id>--issue-…"):
  * a run named like one would reach the pool actor or get a check's tool budget.
@@ -100,7 +94,6 @@ export function topicSlug(topic: string): string {
   return topic.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24).replace(/-+$/, "");
 }
 
-/** A digest's pool actor (watching; agent.ts). */
 /** Call an actor method, turning a synchronous throw (e.g. a missing method) into a rejection. */
 const attempt = <T>(f: () => Promise<T>) => Promise.resolve().then(f);
 
@@ -110,159 +103,6 @@ function isoParam(v: unknown, name: string): string | undefined {
   const t = typeof v === "string" ? Date.parse(v) : NaN;
   if (Number.isNaN(t)) throw new ProfileError("request", `"${name}" must be a date or time (e.g. 2026-11-02 or 2026-11-02T06:00:00Z)`);
   return new Date(t).toISOString();
-}
-
-/** The talk page and its tools (signed by the link's token, not the operator token). */
-async function talkRoute(req: Request, env: RouterEnv, path: string, method: string): Promise<Response> {
-  const s = (n: string) => secret(env, n);
-  const [key, assistantId] = await Promise.all([s(SECRET.feedbackKey), s(SECRET.talkAssistant)]);
-  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
-  if (!key || !assistantId) return json(503, { error: "not_configured", message: "the voice assistant isn't deployed (ai-digest deploy sets it up)" });
-  if (method === "GET" && path === "/v1/talk") {
-    const url = new URL(req.url);
-    const token = url.searchParams.get("t") ?? "";
-    const claim = await verifyTalkToken(key, token);
-    if (!claim) return talkError(400, "This link is invalid or has expired.");
-    const record = await feedback.issueRecord(claim.d);
-    if (!record) return talkError(404, "This issue is no longer stored.");
-    return issuePage(env, url.origin, key, assistantId, record, token, { start: claim.i, autostart: true });
-  }
-  const name = path.match(/^\/v1\/talk\/tools\/([a-z_]+)$/)?.[1];
-  if (method !== "POST" || !name) return json(404, { error: "not_found" });
-  const body = await req.json().catch(() => ({}));
-  const claim = await verifyTalkToken(key, typeof body?.t === "string" ? body.t : "");
-  if (!claim) return json(401, { error: "invalid_token" });
-  const args = body?.args && typeof body.args === "object" ? body.args : {};
-  const record = await feedback.issueRecord(claim.d);
-  if (!record) return json(404, { error: "issue_gone" });
-  const item = record.items.find((i: { n: number }) => i.n === Number(args.story));
-  // Without the binding a tool call throws below and the page gets the error.
-  const telnyx = env.TELNYX as TelnyxPoster;
-  const started = Date.now();
-  try {
-    // Searches and article reads cost money: limited per issue and per deployment each day (TALK_LIMITS).
-    if (name === "search_web" || name === "read_article") {
-      const refused = await feedback.spendTalkTool(claim.d, name);
-      if (refused) return json(200, { error: refused });
-    }
-    let out: unknown;
-    if (name === "read_article") out = item ? await readArticle(telnyx, item, typeof args.focus === "string" ? args.focus.slice(0, 300) : undefined) : { error: "no such story" };
-    else if (name === "search_web") out = typeof args.query === "string" && args.query.trim() ? await searchWeb(telnyx, args.query) : { error: "query is required" };
-    else if (name === "record_vote") out = item && (args.vote === "up" || args.vote === "down") ? await feedback.talkVote({ d: claim.d, i: item.n, v: args.vote, via: "voice" }) : { error: "story and vote (up or down) are required" };
-    // The page's own 👍/👎 and reasons (not one of the assistant's tools).
-    else if (name === "feedback") out = item && (args.vote === "up" || args.vote === "down") ? await feedback.talkVote({ d: claim.d, i: item.n, v: args.vote, r: typeof args.reason === "string" ? args.reason : undefined, x: typeof args.x === "number" ? args.x : undefined, undo: args.undo === true, via: "page" }) : { error: "story and vote (up or down) are required" };
-    else if (name === "log") {
-      const str = (v: unknown, n: number) => (typeof v === "string" ? v.slice(0, n) : v === null || v === undefined ? null : String(v).slice(0, n));
-      console.log(JSON.stringify({ talk: "client error", issue: claim.d, stage: str(args.stage, 20), error: str(args.error, 300), code: str(args.code, 20), fatal: args.fatal === true, ua: str(args.ua, 200) }));
-      return json(200, { ok: true });
-    }
-    else return json(404, { error: "unknown_tool" });
-    console.log(JSON.stringify({ talk: "tool", tool: name, issue: claim.d, story: item?.n ?? null, ms: Date.now() - started }));
-    return json(200, out);
-  } catch (err) {
-    console.log(JSON.stringify({ talk: "tool failed", tool: name, issue: claim.d, error: err instanceof Error ? err.message : String(err) }));
-    return json(200, { error: "the tool failed; say so and continue" });
-  }
-}
-
-/** The issue page for a plain thumbs click (the vote is recorded) or a view link; undefined to use the older pages. */
-async function issuePageFor(req: Request, env: RouterEnv): Promise<Response | undefined> {
-  const url = new URL(req.url);
-  const q = url.searchParams;
-  if (q.has("r") || q.has("undo") || q.has("x")) return undefined;
-  const s = (n: string) => secret(env, n);
-  const [key, assistantId] = await Promise.all([s(SECRET.feedbackKey), s(SECRET.talkAssistant)]);
-  if (!key || !assistantId) return undefined;
-  let d: string, voted: number | undefined, v: "up" | "down" | undefined;
-  if (q.has("view")) {
-    d = q.get("view") ?? "";
-    if (!(await verifyView(key, d, q.get("s") ?? ""))) return undefined;
-  } else {
-    const p = await verifyPayload(key, q.get("p") ?? "", q.get("s") ?? "");
-    if (!p || p.r) return undefined;
-    ({ d, i: voted, v } = { d: p.d, i: p.i, v: p.v });
-  }
-  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
-  const record = await feedback.issueRecord(d);
-  if (!record) return undefined;
-  if (voted !== undefined && v) await feedback.talkVote({ d, i: voted, v, via: "email" });
-  const e = Math.floor(Date.now() / 1000) + TALK_TTL_S;
-  const token = await talkToken(key, { d, e });
-  // The page's links last TALK_TTL_S from now: keep the issue that long.
-  await feedback.keepIssueUntil(d, new Date(e * 1000).toISOString()).catch(() => undefined);
-  return issuePage(env, url.origin, key, assistantId, record, token, { start: voted, autostart: false, voted });
-}
-
-/** The issue page: the issue as emailed, with talk links and the voice dock. */
-async function issuePage(env: RouterEnv, origin: string, key: string, assistantId: string, record: DigestRecord, token: string, opts: { start?: number; autostart: boolean; voted?: number }): Promise<Response> {
-  let html = record.html ? rebaseLinks(record.html, origin) : undefined;
-  if (html) html = addTalkLinks(html, await talkLinks(key, `${origin}/v1/talk`, record.id, record.items));
-  const votes = await env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION).issueVotes(record.id).catch(() => ({}));
-  return talkPage({ token, assistantId, record, start: opts.start, body: emailBody(html), votes, autostart: opts.autostart, voted: opts.voted });
-}
-
-function talkError(status: number, message: string): Response {
-  return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Talk</title><body style="font:16px/1.5 system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px;"><p>${message}</p></body>`, {
-    status,
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" },
-  });
-}
-
-/** The recipients a request names: every address in every entry ("a@example.com, b@example.com" is two), all valid, at least one. */
-export function givenRecipients(to: unknown[]): { ok: true; to: string[] } | { ok: false; message: string } {
-  const words = to.flatMap((a) => (typeof a === "string" ? a.split(/[,;\s]+/).filter(Boolean) : [a]));
-  const invalid = words.filter((w) => typeof w !== "string" || parseRecipients(w).length !== 1);
-  if (invalid.length) return { ok: false, message: `not email addresses: ${invalid.map((a) => JSON.stringify(a)).join(", ")}` };
-  if (!words.length) return { ok: false, message: "no addresses in to (leave it out to use the digest's recipients)" };
-  return { ok: true, to: words as string[] };
-}
-
-/** Email a stored issue again (its stored HTML), adding talk links when it has none. */
-async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<Response> {
-  const s = (n: string) => secret(env, n);
-  const [key, assistantId, from, defaultTo, publicUrl] = await Promise.all([s(SECRET.feedbackKey), s(SECRET.talkAssistant), s(SECRET.emailFrom), s(SECRET.emailTo), s(SECRET.publicUrl)]);
-  const feedback = env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
-  const record = await feedback.issueRecord(id);
-  if (!record?.html) return json(404, { error: "not_found", message: `no stored issue "${id}" (GET /v1/issues lists them)` });
-  if (!env.TELNYX || !from || !publicUrl) return json(503, { error: "not_configured", message: "email isn't configured" });
-  // Recipients given are used as given: a mistyped one, or none at all, is an error, never a reason to
-  // email the default audience. The defaults are only for a request that leaves `to` out.
-  let recipients: string[];
-  if (to !== undefined) {
-    const given = givenRecipients(to);
-    if (!given.ok) return json(400, { error: "invalid_recipients", message: given.message });
-    recipients = given.to;
-  } else {
-    // The digest's own recipients, as a scheduled send of it would use; DIGEST_EMAIL_TO when it names none
-    // (and for General and pre-digest issues). A lookup that fails, or a digest deleted since, sends nothing:
-    // falling back would email an issue to people who never subscribed to it.
-    recipients = [];
-    if (record.profile && record.profile !== GENERAL_ID) {
-      let d: { markdown: string } | null;
-      try {
-        d = await env.AI_DIGEST.idFromName(DIGESTS_CONVERSATION).getDigest(record.profile);
-      } catch (err) {
-        console.log(JSON.stringify({ issue: "resend lookup failed", id, digest: record.profile, error: err instanceof Error ? err.message : String(err) }));
-        return json(503, { error: "digest_unavailable", message: `couldn't load digest "${record.profile}" to find its recipients; try again, or pass "to"` });
-      }
-      if (!d) return json(409, { error: "digest_gone", message: `digest "${record.profile}" no longer exists; pass "to" to send this issue` });
-      recipients = parseProfile(record.profile, d.markdown).to;
-    }
-    if (!recipients.length) recipients = parseRecipients(defaultTo);
-    if (!recipients.length) return json(400, { error: "no_recipients" });
-  }
-  let html = rebaseLinks(record.html, publicUrl);
-  if (key && assistantId) {
-    // New links last TALK_TTL_S from now: keep the issue that long.
-    const added = !hasTalkLinks(html);
-    if (added) html = addTalkLinks(html, await talkLinks(key, talkBase(publicUrl), id, record.items));
-    if (html !== record.html) await feedback.setIssueHtml(id, html, added ? new Date(Date.now() + TALK_TTL_S * 1000).toISOString() : undefined);
-  }
-  const talk = hasTalkLinks(html);
-  const text = `${record.subject}\n\nThis digest is best read as HTML.${talk ? `\n\n🎧 Talk about this issue: ${issueTalkLink(html) ?? ""}` : ""}`;
-  const data = await sendEmail(env.TELNYX, { from, to: recipients, subject: record.subject, text, html });
-  console.log(JSON.stringify({ issue: "resent", id, recipients: recipients.length, talk, email: data?.id }));
-  return json(200, { issue: id, recipients: recipients.length, talkLinks: talk, email: data?.id ?? null, status: data?.status ?? null });
 }
 
 /** How the built-in General digest appears in GET /v1/digests. */

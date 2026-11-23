@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Internal: the actors' state, the calls between actors and from the router to them are typed (`src/actor-state.ts`, `src/actors.ts`), so the type check covers them.
 - Internal: `src/feedback.ts` split into feedback records and links, the thumbs pages (`src/feedback-pages.ts`), Agent Memory (`src/memory.ts`), link signing (`src/signing.ts`) and the shared page frame (`src/pages.ts`); one TELNYX client type (`src/telnyx.ts`).
 - Internal: the pool, `feedback` and `digests` actor roles moved out of the agent class into `src/pool-actor.ts`, `src/feedback-actor.ts` and `src/digests-actor.ts`; the class delegates to them under the same method names, so scheduled tasks and calls between actors are unchanged.
+- Internal: the talk routes (`src/talk-routes.ts`, the tools as a table) and resending (`src/resend.ts`) moved out of the router; the talk page's styles and script moved out of its template into `src/talk-client.ts`. The page served is byte for byte the same.
 
 ### Fixed
 
