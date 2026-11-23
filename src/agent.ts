@@ -5,7 +5,7 @@ import { z } from "zod";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { addImages } from "./images.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
-import { DOWN_REASONS, UP_REASONS, selectionsOf, sharedEntityPrefs, validReason } from "./preferences.ts";
+import { DOWN_REASONS, ENTITY_OPTIONS, UP_REASONS, selectionsOf, sharedEntityPrefs, validEntityIndex, validReason } from "./preferences.ts";
 import { digestFromReply } from "./digest.ts";
 import { SECRET, loadConfig, secret } from "./config.ts";
 import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
@@ -792,7 +792,7 @@ export class AiDigest extends ManagedAgent {
       for (const r of p.v === "up" ? UP_REASONS : DOWN_REASONS) {
         if (r !== "entity") reasons[r] = await feedbackLink(key, base, { ...pay, r });
         else if (!ents.length) reasons.entity = await feedbackLink(key, base, { ...pay, r });
-        else for (let k = 0; k < Math.min(3, ents.length); k++) reasons[`entity:${k}`] = await feedbackLink(key, base, { ...pay, r, x: k });
+        else for (let k = 0; k < Math.min(ENTITY_OPTIONS, ents.length); k++) reasons[`entity:${k}`] = await feedbackLink(key, base, { ...pay, r, x: k });
       }
       return thanksPage({ base, vote, item, digest, prefs: preferencesFrom(votes), links: { undo, flip, view, reasons } });
     } catch (err) {
@@ -933,7 +933,7 @@ export class AiDigest extends ManagedAgent {
       return { ok: true, story: p.i, vote: null, reasons: [] };
     }
     const reason = p.r && validReason(p.v, p.r) ? (p.r as any) : undefined;
-    const x = reason === "entity" && Number.isInteger(p.x) && p.x! >= 0 && p.x! <= 2 ? p.x : undefined;
+    const x = reason === "entity" && validEntityIndex(p.x) ? p.x : undefined;
     // A reason applies to a vote of the same kind: cast the vote first when there isn't one.
     let base = prior;
     if (reason && (!prior || prior.vote !== p.v)) base = nextVote(prior, { d: p.d, i: p.i, v: p.v, e: 0 }, item, new Date().toISOString()).vote;

@@ -289,3 +289,13 @@ test("retainIssues: the newest 12 stay as they are; older ones lose their HTML a
   const lag = retainIssues([...many.slice(0, KEEP_DIGESTS), issue("lag", 50, { talkUntil: new Date(now - 12 * 3600_000).toISOString() })], now, ttl);
   assert.equal(lag.lag?.html, "");
 });
+
+test("entity options: the links, the page and the checks share one limit", async () => {
+  const { ENTITY_OPTIONS, validEntityIndex } = await import("../src/preferences.ts");
+  for (let x = 0; x < ENTITY_OPTIONS; x++) assert.equal(validEntityIndex(x), true);
+  for (const x of [-1, ENTITY_OPTIONS, 0.5, "0", undefined]) assert.equal(validEntityIndex(x), false);
+  const link = async (x: number) => feedbackLink(KEY, BASE, { d: "d1", i: 1, v: "down", e: future, r: "entity", x });
+  const verify = async (l: string) => verifyPayload(KEY, params(l).get("p")!, params(l).get("s")!);
+  assert.equal((await verify(await link(ENTITY_OPTIONS - 1)))?.x, ENTITY_OPTIONS - 1);
+  assert.equal(await verify(await link(ENTITY_OPTIONS)), undefined);
+});

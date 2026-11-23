@@ -3,8 +3,8 @@
 // story gets 👍/👎 with reasons and a "Discuss" button; while a conversation
 // is live, Discuss switches it to that story without reconnecting.
 
-import { esc, type DigestRecord } from "./feedback.ts";
-import { DOWN_REASONS, UP_REASONS, reasonLabel } from "./preferences.ts";
+import { b64url, esc, type DigestRecord } from "./feedback.ts";
+import { DOWN_REASONS, ENTITY_OPTIONS, UP_REASONS, reasonLabel } from "./preferences.ts";
 import { AGENT_LIB, headerValue, issueBrief } from "./talk.ts";
 import { talkGreeting } from "./talk-instructions.ts";
 import { ISSUE_END, ISSUE_START } from "./agent.ts";
@@ -47,11 +47,63 @@ function reasonOptions(entities: string[], tags: string[]) {
   const opts = (vote: "up" | "down", list: readonly string[]) =>
     list.flatMap((r) =>
       r === "entity" && entities.length
-        ? entities.slice(0, 3).map((e, x) => ({ r, x, target: e, label: reasonLabel(vote, r as any, [e], tags) }))
+        ? entities.slice(0, ENTITY_OPTIONS).map((e, x) => ({ r, x, target: e, label: reasonLabel(vote, r as any, [e], tags) }))
         : [{ r, label: reasonLabel(vote, r as any, entities, tags) }],
     );
   return { up: opts("up", UP_REASONS), down: opts("down", DOWN_REASONS) };
 }
+
+/**
+ * Only the page's own script runs: a nonce for it, and whatever it imports (the voice library from
+ * esm.sh). Scripts or handlers that got into the issue's HTML don't, nor do plugins, a <base> or forms.
+ * Other directives fall back to "allow": the email's images and the call's connections come from many hosts.
+ */
+export function talkCsp(nonce: string): string {
+  return [
+    `script-src 'nonce-${nonce}' 'strict-dynamic' https: 'unsafe-inline'`,
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-src 'none'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+/**
+ * The page's cleanHtml(html): the issue's HTML as a fragment of allowlisted elements and attributes.
+ * Scripts, styles, frames, forms and the like go with their contents; other unknown elements are
+ * unwrapped; links and images keep only http(s) (links also mailto:) and relative URLs; inline styles
+ * that load anything or use CSS escapes are dropped. A <template>'s content is inert: parsing runs and loads nothing.
+ */
+const CLEAN_HTML = String.raw`function cleanHtml(html) {
+  const KEEP = new Set("a abbr b blockquote br caption center code del div em figcaption figure h1 h2 h3 h4 h5 h6 hr i img li ol p pre s small span strong sub sup table tbody td tfoot th thead tr u ul".split(" "));
+  const DROP = new Set("script style iframe frame frameset object embed applet template noscript link meta base form input button textarea select option svg math audio video source track canvas dialog portal".split(" "));
+  const ATTRS = new Set(["href", "src", "alt", "title", "width", "height", "style", "align", "valign", "colspan", "rowspan", "role", "aria-label", "cellpadding", "cellspacing"]);
+  // Browsers ignore whitespace and control characters in a URL's scheme ("java\tscript:"), so the check does too.
+  const okUrl = (u, link) => { const m = u.replace(/[\u0000- ]/g, "").match(/^([a-z][a-z0-9+.-]*):/i); return !m || /^https?$/i.test(m[1]) || (link && /^mailto$/i.test(m[1])); };
+  const t = document.createElement("template");
+  t.innerHTML = html ?? "";
+  const walk = (node) => {
+    for (const el of [...node.children]) {
+      const tag = el.localName;
+      if (DROP.has(tag) || el.namespaceURI !== "http://www.w3.org/1999/xhtml") { el.remove(); continue; }
+      walk(el);
+      if (!KEEP.has(tag)) { el.replaceWith(...el.childNodes); continue; }
+      for (const a of [...el.attributes]) {
+        const name = a.name.toLowerCase();
+        const ok = ATTRS.has(name)
+          && (name !== "href" || (tag === "a" && okUrl(a.value, true)))
+          && (name !== "src" || (tag === "img" && okUrl(a.value, false)))
+          && (name !== "style" || !/\\|url\s*\(|image-set|expression|@import|behavior|-moz-binding/i.test(a.value));
+        if (!ok) el.removeAttribute(a.name);
+      }
+      if (tag === "a") el.setAttribute("rel", "noopener noreferrer");
+    }
+    for (const c of [...node.childNodes]) if (c.nodeType === 8) c.remove();
+  };
+  walk(t.content);
+  return t.content;
+}`;
 
 const ICON = {
   mic: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>`,
@@ -81,9 +133,12 @@ export function talkPage({ token, assistantId, record, start, body, votes, autos
     })),
     votes,
     icons: { mic: ICON.mic, micOff: ICON.micOff },
+    // The issue's HTML goes to the page as data and is put in through an allowlist (cleanHtml below):
+    // it was written by a model from web pages, and the page holds a talk token.
+    body: body ?? bodyFromItems(record),
   };
   const json = JSON.stringify(data).replace(/</g, "\\u003c");
-  const content = body ?? bodyFromItems(record);
+  const nonce = b64url(crypto.getRandomValues(new Uint8Array(18)));
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex"><meta name="theme-color" content="#f5f5f4"><link rel="icon" href="data:,"><title>${esc(record.subject)}</title>
@@ -138,8 +193,10 @@ body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 -apple-system
 .toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--text);color:#fff;font-size:14px;padding:8px 14px;border-radius:999px;opacity:0;transition:opacity .25s;pointer-events:none}
 .toast.on{opacity:1}
 @media (prefers-reduced-motion:reduce){.orb,.eq i,.dock[data-s=connecting] .orb{animation:none!important}}
-</style></head><body>
-<div class="wrap"><article id="issue">${content}</article></div>
+</style>
+<script type="application/json" id="talk-data">${json}</script>
+</head><body>
+<div class="wrap"><article id="issue"></article></div>
 <div class="dock" id="dock" data-s="idle"><div class="in">
 <div class="viz" aria-hidden="true"><div class="ring" id="ring"></div><div class="orb" id="orb"></div></div>
 <div class="txt"><div class="k" id="dk">Talk about this issue</div><div class="t" id="dt">${esc(brief.digest)} · ${esc(brief.sent)}</div></div>
@@ -149,9 +206,9 @@ body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 -apple-system
 </div></div>
 <div class="toast" id="toast" role="status"></div>
 <audio id="audio" autoplay playsinline></audio>
-<script type="application/json" id="talk-data">${json}</script>
-<script type="module">
+<script type="module" nonce="${nonce}">
 const D = JSON.parse(document.getElementById("talk-data").textContent);
+${CLEAN_HTML}
 const $ = (id) => document.getElementById(id);
 const dock = $("dock"), dk = $("dk"), dt = $("dt"), orb = $("orb"), ring = $("ring"), audio = $("audio");
 const go = $("go"), muteBtn = $("mute"), endBtn = $("end");
@@ -167,6 +224,7 @@ const api = async (name, args) => {
 
 // ── the issue: each "## N." section becomes a story with its own controls ──
 const issue = $("issue");
+issue.append(cleanHtml(D.body));
 for (const a of issue.querySelectorAll('a[href*="/v1/talk?t="]')) if (/Talk about this issue/.test(a.textContent)) a.closest("p")?.remove();
 const sections = new Map();
 for (const h of [...issue.querySelectorAll("h2")]) {
@@ -214,10 +272,15 @@ function render(n, v, note, open = true) {
 // "saved" holds the last vote the server confirmed: a failed save (an error reply or no reply) goes back to it.
 // "stale" marks a story whose screen may show a tap that failed while a later one was waiting: the
 // answer to the later one then redraws it.
-const queue = new Map(), seq = new Map(), saved = new Map(), stale = new Set();
+// A reason tap leaves the chips as they are (they already show it) only when nothing else for the story
+// was waiting: the chips then match what the server had. A vote still on its way (a voice vote that flips
+// the story, say) can change the reasons under them, so then the answer redraws them.
+const queue = new Map(), seq = new Map(), saved = new Map(), stale = new Set(), pending = new Map();
 function enqueue(n, call, note, rerender = true) {
   const mine = (seq.get(n) ?? 0) + 1; seq.set(n, mine);
   if (!saved.has(n)) saved.set(n, D.votes[n]);
+  if (pending.get(n)) rerender = true;
+  pending.set(n, (pending.get(n) ?? 0) + 1);
   const latest = () => seq.get(n) === mine;
   const failed = (r) => {
     if (!latest()) { stale.add(n); return r; }
@@ -232,7 +295,7 @@ function enqueue(n, call, note, rerender = true) {
     else { D.votes[n] = v; sections.get(n).acts.querySelector(".saved").textContent = note; }
     stale.delete(n);
     return r;
-  }, () => failed({ error: "couldn't reach the server" }));
+  }, () => failed({ error: "couldn't reach the server" })).finally(() => pending.set(n, pending.get(n) - 1));
   queue.set(n, run.catch(() => {}));
   return run;
 }
@@ -391,5 +454,5 @@ if (D.autostart) { if (D.start && sections.has(D.start)) { touched = 0; start(D.
 else if (D.start && sections.has(D.start)) { sections.get(D.start).sec.scrollIntoView({ block: "start" }); if (D.voted) toast("Thanks, your vote is saved"); }
 </script>
 </body></html>`;
-  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex", "referrer-policy": "no-referrer" } });
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex", "referrer-policy": "no-referrer", "content-security-policy": talkCsp(nonce) } });
 }

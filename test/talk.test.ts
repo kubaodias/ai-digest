@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { TALK_LIMITS, spendTalkTool, addTalkLinkText, addTalkLinks, rebaseLinks, digestName, headerValue, issueBrief, talkLinks, talkToken, verifyTalkToken } from "../src/talk.ts";
 import { talkGreeting } from "../src/talk-instructions.ts";
-import type { DigestRecord } from "../src/feedback.ts";
+import { thumbsRow, type DigestRecord } from "../src/feedback.ts";
+import { renderEmailHtml } from "../src/agent.ts";
 
 const KEY = "test-key";
 
@@ -19,9 +20,9 @@ test("talk tokens: round trip, story optional; tampered, foreign-key and expired
   assert.equal(await verifyTalkToken(KEY, await talkToken(KEY, { d: "x", e: 1 })), undefined);
 });
 
-const row = (n: number) =>
-  `<div style="margin:14px 0 0;"><span style="vertical-align:middle;padding-right:4px;">Useful?</span><a href="https://digest.example.com/v1/feedback?p=${n}u" title="More like this"><img src="u.png" alt="More like this"></a><a href="https://digest.example.com/v1/feedback?p=${n}d" title="Less like this"><img src="d.png" alt="Less like this"></a></div>`;
-const email = `<html><body><h1 style="font-size:24px;">Agent Memory — Nov 3–16</h1><h2>1. Mem0 adds graph memory</h2><p>Why.</p>${row(1)}<h2>2. Zep benchmark</h2><p>Why.</p>${row(2)}</body></html>`;
+// The email as it's sent: the renderer's HTML with feedback.ts's thumbs rows (as addFeedbackLinks puts them).
+const row = (n: number) => thumbsRow("https://digest.example.com", `https://digest.example.com/v1/feedback?p=${n}u`, `https://digest.example.com/v1/feedback?p=${n}d`);
+const email = renderEmailHtml(`# Agent Memory — Nov 3–16\n\n## 1. Mem0 adds graph memory\nWhy.${row(1)}## 2. Zep benchmark\nWhy.${row(2)}`, "Agent Memory — Nov 3–16");
 
 test("addTalkLinks: a button under the title and a Discuss link in each story's thumbs row, in order; idempotent", async () => {
   const links = await talkLinks(KEY, "https://digest.example.com/v1/talk", "20261116-ab12", [{ n: 1 }, { n: 2 }]);
@@ -68,7 +69,6 @@ test("rebaseLinks: the issue's own links move to the public URL; article links s
 });
 
 test("talk page: takes the issue out of the email it was sent as, and out of emails sent before the marks", async () => {
-  const { renderEmailHtml } = await import("../src/agent.ts");
   const { emailBody } = await import("../src/talk-page.ts");
   const html = renderEmailHtml("# Weekly\n\n## 1. A story\n**Why it matters:** because\n", "Weekly");
   const body = emailBody(html)!;
@@ -95,4 +95,28 @@ test("talk tool limits: per issue and for the deployment, per UTC day; shared us
   // A new day starts over.
   assert.equal(spendTalkTool(use, "a", "read_article", day2), undefined);
   assert.deepEqual((use as any).total, { read_article: 1 });
+});
+
+test("talk page: the issue's HTML is data, not markup; only the page's own script may run", async () => {
+  const { talkPage } = await import("../src/talk-page.ts");
+  const record = { id: "d1", subject: "Weekly", sentAt: "2026-11-16T08:00:00Z", items: [{ n: 1, headline: "A story", why: "w" }] } as unknown as DigestRecord;
+  const body = `<h2>1. A story</h2><p>x</p><script>steal()</script><img src=x onerror="steal()"><div id="talk-data">{}</div>`;
+  const res = talkPage({ token: "tok", assistantId: "a", record, body, votes: {}, autostart: false });
+  const html = await res.text();
+  const csp = res.headers.get("content-security-policy")!;
+  const nonce = csp.match(/'nonce-([^']+)'/)?.[1];
+  assert.ok(nonce && nonce.length >= 16);
+  assert.match(csp, /'strict-dynamic'/);
+  assert.match(csp, /object-src 'none'/);
+  assert.match(csp, /base-uri 'none'/);
+  // One script runs, with the nonce; the data block sits in <head>, ahead of anything the issue holds.
+  assert.deepEqual([...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]), ['<script type="application/json" id="talk-data">', `<script type="module" nonce="${nonce}">`]);
+  assert.ok(html.indexOf('id="talk-data"') < html.indexOf("</head>"));
+  assert.doesNotMatch(html, /<script>steal|onerror="steal/);
+  assert.match(html, /<article id="issue"><\/article>/);
+  const data = JSON.parse(html.match(/<script type="application\/json" id="talk-data">([\s\S]*?)<\/script>/)![1]!);
+  assert.equal(data.body, body);
+  // A new nonce each time.
+  const again = talkPage({ token: "tok", assistantId: "a", record, body, votes: {}, autostart: false });
+  assert.notEqual(again.headers.get("content-security-policy"), csp);
 });
