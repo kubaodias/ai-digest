@@ -7,7 +7,7 @@ import { b64url, esc, type DigestRecord } from "./feedback.ts";
 import { DOWN_REASONS, ENTITY_OPTIONS, UP_REASONS, reasonLabel } from "./preferences.ts";
 import { AGENT_LIB, headerValue, issueBrief } from "./talk.ts";
 import { talkGreeting } from "./talk-instructions.ts";
-import { ISSUE_END, ISSUE_START } from "./agent.ts";
+import { ISSUE_END, ISSUE_START } from "./email.ts";
 
 export interface TalkPageInput {
   token: string;

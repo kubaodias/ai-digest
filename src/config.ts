@@ -52,3 +52,9 @@ export async function loadConfig(env: ManagedEnv): Promise<{ config?: DigestConf
   if (missing.length) return { missing };
   return { config: { emailFrom: from!, emailTo, publicUrl: url!.replace(/\/+$/, "") }, missing };
 }
+
+/** The FEEDBACK_KEY secret that signs the thumbs links; undefined when it isn't bound (then no links are added). */
+export async function feedbackKey(env: ManagedEnv): Promise<string | undefined> {
+  const secrets = (env as any).SECRETS;
+  return secrets ? ((await secrets.get(SECRET.feedbackKey).catch(() => "")) || undefined) : undefined;
+}

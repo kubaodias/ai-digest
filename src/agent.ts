@@ -1,23 +1,24 @@
 import { ManagedAgent, type ManagedAgentSpec, type ManagedEnv } from "@telnyx/acp/managed";
 import { tool } from "ai";
-import { marked } from "marked";
 import { z } from "zod";
 import { INSTRUCTIONS } from "./instructions.ts";
-import { addImages } from "./images.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
 import { DOWN_REASONS, ENTITY_OPTIONS, UP_REASONS, selectionsOf, sharedEntityPrefs, validEntityIndex, validReason } from "./preferences.ts";
 import { digestFromReply } from "./digest.ts";
-import { SECRET, loadConfig, secret } from "./config.ts";
-import { GENERAL_ID, LEGACY_PROFILE, audienceOf, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
+import { DIGESTS_CONVERSATION, digestsActor, feedbackActor, poolActor, poolConversation } from "./actors.ts";
+import { sendDigestEmail } from "./delivery.ts";
+import { sendEmail } from "./email.ts";
+import { SECRET, feedbackKey, secret } from "./config.ts";
+import { GENERAL_ID, LEGACY_PROFILE, generalProfile, parseProfile, profileIdOf, type DigestProfile } from "./profile.ts";
 import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
   canonicalUrl, capPerEntity, claimLease, decide, housekeep, leaseWaitS, mergeCandidates, parseCheckReply, releasesLease, rescore, watchSettings, slotOf,
   type Candidate, type Decision, type PoolEntry, type RunLease, type Sighting,
 } from "./pool.ts";
 import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
-import { TALK_TTL_S, countTalkTool, type TalkTool, type TalkUsage, addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
+import { TALK_TTL_S, countTalkTool, type TalkTool, type TalkUsage } from "./talk.ts";
 import {
-  FEEDBACK_CONVERSATION, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
+  FEEDBACK_CONVERSATION, MEMORY_NAMESPACE, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, retainIssues, tagItems, TALK_UNTIL_SLACK_MS, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestItemRecord, type DigestRecord, type StoredVote,
 } from "./feedback.ts";
 
@@ -32,8 +33,6 @@ import {
 // ("<digest>--issue-<slot>"); see pool.ts and docs/spec/0010-watching.md.
 // Account-specific settings are Telnyx secrets: see config.ts.
 
-/** The service actor that stores the digest definitions. */
-const DIGESTS_CONVERSATION = "digests";
 /** Versions kept per digest definition. */
 const KEEP_VERSIONS = 10;
 
@@ -46,55 +45,6 @@ const spec: ManagedAgentSpec = {
   // No `memory`: the agent keeps nothing between conversations.
 } as ManagedAgentSpec;
 
-/** The footer logo (the Telnyx mark, 200x200 PNG). */
-const LOGO_URL = "https://www.activepieces.com/piece-icon/telnyx";
-
-/** Marks around the issue in the email, so the talk page can take it out without depending on the layout. */
-export const ISSUE_START = "<!--ai-digest:issue-->";
-export const ISSUE_END = "<!--/ai-digest:issue-->";
-
-/** Markdown → an email-safe HTML document (inline styles; Gmail drops most <style> rules). */
-export function renderEmailHtml(markdown: string, subject: string): string {
-  const body = (marked.parse(markdown, { async: false, gfm: true, breaks: true }) as string)
-    .replace(/<h1>/g, '<h1 style="font-size:24px;line-height:1.3;margin:0 0 20px;color:#111827;">')
-    .replace(/<h2>/g, '<h2 style="font-size:18px;line-height:1.35;margin:28px 0 8px;color:#111827;border-top:1px solid #e5e7eb;padding-top:20px;">')
-    .replace(/<h3>/g, '<h3 style="font-size:16px;margin:20px 0 6px;color:#111827;">')
-    .replace(/<p>/g, '<p style="margin:0 0 10px;">')
-    .replace(/<ul>/g, '<ul style="margin:0 0 12px;padding-left:22px;">')
-    .replace(/<ol>/g, '<ol style="margin:0 0 12px;padding-left:22px;">')
-    .replace(/<li>/g, '<li style="margin:0 0 6px;">')
-    .replace(/<a href=/g, '<a style="color:#2563eb;text-decoration:none;" href=')
-    .replace(/<code>/g, '<code style="font-family:SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;background:#f3f4f6;padding:1px 4px;border-radius:4px;">')
-    .replace(/<pre>/g, '<pre style="background:#f3f4f6;padding:12px;border-radius:6px;overflow:auto;">')
-    // A picked image and its caption line (from images.ts) become one centered block.
-    .replace(/<p[^>]*>\s*<img src="([^"]+)" alt="([^"]*)">(?:<br>)?\s*<em>([^<]*)<\/em>\s*<\/p>/g,
-      '<div style="margin:14px 0 16px;text-align:center;"><img width="600" src="$1" alt="$2" style="display:block;width:100%;max-width:600px;height:auto;margin:0 auto;border-radius:8px;border:1px solid #e5e7eb;"><div style="font-size:12px;line-height:1.4;color:#6b7280;margin-top:6px;">$3</div></div>')
-    .replace(/<img src=/g, '<img style="display:block;max-width:100%;height:auto;border-radius:8px;" src=')
-    .replace(/<blockquote>/g, '<blockquote style="margin:0 0 12px;padding-left:12px;border-left:3px solid #e5e7eb;color:#4b5563;">');
-  const title = subject.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
-<body style="margin:0;padding:0;background:#f5f5f4;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f4;"><tr><td align="center" style="padding:24px 12px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border-radius:10px;">
-<tr><td style="padding:28px 28px 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;">
-${ISSUE_START}
-${body}
-${ISSUE_END}
-</td></tr>
-<tr><td style="padding:14px 28px 22px;border-top:1px solid #f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:20px;color:#9ca3af;">
-<span style="vertical-align:middle;">AI Digest · made with <a href="https://telnyx.com/products/edge-compute" style="color:#9ca3af;text-decoration:underline;">Telnyx Edge Compute</a></span><img src="${LOGO_URL}" width="20" height="20" alt="Telnyx" style="display:inline-block;width:20px;height:20px;border:0;vertical-align:middle;margin-left:6px;">
-</td></tr>
-</table></td></tr></table>
-</body></html>`;
-}
-
-/** The FEEDBACK_KEY secret that signs the thumbs links; undefined when it isn't bound (then no links are added). */
-async function feedbackKey(env: ManagedEnv): Promise<string | undefined> {
-  const secrets = (env as any).SECRETS;
-  return secrets ? ((await secrets.get(SECRET.feedbackKey).catch(() => "")) || undefined) : undefined;
-}
-
 /**
  * "I don't use X" needs to know X: fill in entities for a vote on an item tagged before entities existed
  * (the main one is meant). Used by the email's thumbs and the talk page alike.
@@ -106,12 +56,6 @@ async function backfillEntities(telnyx: any, vote: StoredVote, item: { why?: str
   if (vote.entities[0]) untargeted.target = vote.entities[0];
 }
 
-/** The service actors, reached in-process. */
-const feedbackActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(FEEDBACK_CONVERSATION);
-const digestsActor = (env: ManagedEnv) => (env as any).AI_DIGEST.idFromName(DIGESTS_CONVERSATION);
-/** A digest's pool actor (watching). */
-export const poolConversation = (digest: string) => `${digest}--pool`;
-const poolActor = (env: ManagedEnv, digest: string) => (env as any).AI_DIGEST.idFromName(poolConversation(digest));
 const DAY_MS = 24 * 3600 * 1000;
 /** A check still counts as running for this long (then a new one may start). */
 const CHECK_TIMEOUT_MS = 30 * 60 * 1000;
@@ -184,81 +128,6 @@ function emailTools(env: ManagedEnv, holder: ActorHolder) {
       },
     }),
   };
-}
-
-/** Emailing a finished digest: pictures, thumbs links, render, send, and register the digest with the feedback actor. */
-async function sendDigestEmail(
-  env: ManagedEnv,
-  { subject, markdown, profileId, profile }: { subject: string; markdown: string; profileId: string; profile?: DigestProfile },
-) {
-  const started = Date.now();
-  const telnyx = env.TELNYX as any;
-  if (!telnyx) return { ok: false, error: "no TELNYX binding" };
-  const { config, missing } = await loadConfig(env);
-  if (!config) return { ok: false, error: `missing secrets: ${missing.join(", ")} (telnyx-acp add secret NAME)` };
-  const base = feedbackBase(config.publicUrl);
-  const images = profile?.images ?? true;
-  const to = profile?.to.length ? profile.to : config.emailTo;
-  const log = (e: Record<string, unknown>) => console.log(JSON.stringify(e));
-  // Pictures go into the HTML part only; a failure here never blocks the email.
-  let htmlMarkdown = markdown;
-  let picked: { headline: string; images: number; note?: string }[] = [];
-  let pickedImages: { url: string; caption: string }[][] = [];
-  if (images) {
-    try {
-      const r = await addImages(telnyx, markdown, log, audienceOf(profile));
-      htmlMarkdown = r.markdown;
-      picked = r.report.map((i) => ({ headline: i.headline, images: i.images.length, ...(i.note ? { note: i.note } : {}) }));
-      pickedImages = r.report.map((i) => i.images.map((im) => ({ url: im.url, caption: im.caption })));
-      log({ images: "done", items: picked.length, withImages: picked.filter((p) => p.images > 0).length, ms: Date.now() - started });
-    } catch (err) {
-      log({ images: "failed", error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-  // Grey thumbs links closing each item (HTML part only); skipped when the signing key is missing.
-  const digestId = new Date().toISOString().slice(0, 10).replace(/-/g, "") + "-" + Math.random().toString(36).slice(2, 6);
-  let feedbackItems = 0;
-  let record: DigestRecord | undefined;
-  try {
-    const key = await feedbackKey(env);
-    if (key) {
-      const r = await addFeedbackLinks(telnyx, key, base, digestId, subject, markdown, htmlMarkdown, pickedImages);
-      htmlMarkdown = r.markdown;
-      record = { ...r.record, profile: profileId, ...(profile?.topic ? { topic: profile.topic } : {}) };
-      feedbackItems = r.record.items.length;
-      log({ feedback: "links added", digest: digestId, items: feedbackItems, tags: r.record.items.map((i) => i.tags) });
-    } else log({ feedback: "no FEEDBACK_KEY; links skipped" });
-  } catch (err) {
-    log({ feedback: "links failed", error: err instanceof Error ? err.message : String(err) });
-  }
-  try {
-    // The API wants `to` as an array and the bodies as text_body / html_body (unknown fields are silently dropped).
-    let html = renderEmailHtml(htmlMarkdown, subject);
-    let text = markdown;
-    // "Talk about this issue" and a "Discuss" link per story, once the voice assistant is deployed.
-    const key = record && (await secret(env, SECRET.talkAssistant)) ? await feedbackKey(env) : undefined;
-    if (key && record) {
-      const links = await talkLinks(key, talkBase(config.publicUrl), digestId, record.items);
-      html = addTalkLinks(html, links);
-      text = addTalkLinkText(text, links.issue);
-    }
-    const res: any = await telnyx.post("/emails", {
-      body: { from: config.emailFrom, to, subject, text_body: text, html_body: html },
-    });
-    const data = res?.data ?? res;
-    // The feedback actor keeps the digest so a click can show the article and the digest it came from.
-    if (record) {
-      await feedbackActor(env)
-        .registerDigest({ ...record, html })
-        .catch((err: unknown) => log({ feedback: "register failed", error: err instanceof Error ? err.message : String(err) }));
-    }
-    log({ emailApi: "queued", ok: true, digest: profileId, id: data?.id, status: data?.status, ms: Date.now() - started });
-    return { ok: true, id: data?.id, status: data?.status, imagesAdded: picked.reduce((n, p) => n + p.images, 0), feedbackItems, digestId };
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    log({ emailApi: "failed", ok: false, error, ms: Date.now() - started });
-    return { ok: false, error };
-  }
 }
 
 // rememberRun (below) extends ManagedAgent's post-run hook, which @telnyx/acp's types mark private
@@ -1049,7 +918,7 @@ export class AiDigest extends ManagedAgent {
     const started = Date.now();
     const from = await secret(this.agentEnv, SECRET.emailFrom);
     try {
-      await (this.agentEnv.TELNYX as any).post("/emails", { body: { from, to: [mail.to], subject: mail.subject, text_body: mail.text, html_body: mail.html } });
+      await sendEmail(this.agentEnv.TELNYX as any, { from, to: [mail.to], subject: mail.subject, text: mail.text, html: mail.html });
       console.log(JSON.stringify({ email: "sent", subject: mail.subject, ms: Date.now() - started }));
     } catch (err) {
       console.log(JSON.stringify({ email: "failed", subject: mail.subject, error: err instanceof Error ? err.message : String(err) }));

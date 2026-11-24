@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { TALK_LIMITS, countTalkTool, addTalkLinkText, addTalkLinks, hasTalkLinks, issueTalkLink, rebaseLinks, digestName, headerValue, issueBrief, talkLinks, talkToken, verifyTalkToken } from "../src/talk.ts";
 import { talkGreeting } from "../src/talk-instructions.ts";
 import { thumbsRow, type DigestRecord } from "../src/feedback.ts";
-import { renderEmailHtml } from "../src/agent.ts";
+import { renderEmailHtml } from "../src/email.ts";
 
 const KEY = "test-key";
 

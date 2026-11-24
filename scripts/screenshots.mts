@@ -8,7 +8,7 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import puppeteer from "puppeteer-core";
-import { renderEmailHtml } from "../src/agent.ts";
+import { renderEmailHtml } from "../src/email.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "../src/assets.ts";
 import { addFeedbackLinks, digestItems, nextVote, preferencesFrom, thanksPage, type DigestItemRecord } from "../src/feedback.ts";
 import { digestPage, listPage } from "../src/app.ts";

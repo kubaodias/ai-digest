@@ -33,6 +33,7 @@ import { parseRecipients } from "./config.ts";
 import { TALK_TTL_S, addTalkLinks, hasTalkLinks, issueTalkLink, readArticle, rebaseLinks, searchWeb, talkBase, talkLinks, talkToken, verifyTalkToken } from "./talk.ts";
 import { verifyPayload, verifyView } from "./feedback.ts";
 import { emailBody, talkPage } from "./talk-page.ts";
+import { sendEmail } from "./email.ts";
 
 export const VERSION = "0.6.2";
 export const FEEDBACK_ACTOR = "feedback";
@@ -79,7 +80,7 @@ async function appRoute(req: Request, env: RouterEnv): Promise<Response> {
       const queued = await Promise.resolve()
         .then(() => env.AI_DIGEST.idFromName(DIGESTS_ACTOR).queueEmail({ to, subject, text, html }))
         .catch(() => false);
-      if (!queued) await t.post("/emails", { body: { from, to: [to], subject, text_body: text, html_body: html } });
+      if (!queued) await sendEmail(t, { from, to: [to], subject, text, html });
     },
   });
 }
@@ -267,8 +268,7 @@ async function resendIssue(env: RouterEnv, id: string, to?: string[]): Promise<R
   }
   const talk = hasTalkLinks(html);
   const text = `${record.subject}\n\nThis digest is best read as HTML.${talk ? `\n\n🎧 Talk about this issue: ${issueTalkLink(html) ?? ""}` : ""}`;
-  const res: any = await env.TELNYX.post("/emails", { body: { from, to: recipients, subject: record.subject, text_body: text, html_body: html } });
-  const data = res?.data ?? res;
+  const data = await sendEmail(env.TELNYX, { from, to: recipients, subject: record.subject, text, html });
   console.log(JSON.stringify({ issue: "resent", id, recipients: recipients.length, talk, email: data?.id }));
   return json(200, { issue: id, recipients: recipients.length, talkLinks: talk, email: data?.id ?? null, status: data?.status ?? null });
 }

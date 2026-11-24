@@ -10,6 +10,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - `ai-digest deploy` creates or updates the assistant (`ai-digest-talk`; `scripts/assistant.mjs`). Its tools run in the page, which calls `POST /v1/talk/tools/<name>` with the link's token, so the assistant holds no credential. Web searches and article reads, which cost money, are limited per issue and for the whole deployment each day (`TALK_LIMITS` in `src/talk.ts`); past a limit the assistant says it can't look things up today. `TALK=off` in `.env` leaves it out; `TALK_VOICE` picks another voice.
 - `GET /v1/issues` lists sent issues; `POST /v1/issues/<id>/send` emails a stored issue again, adding talk links when it has none; `to` (optional) names the recipients, and an address in it that isn't one is refused rather than replaced by the digest's recipients. Without `to` it goes to the issue's digest's recipients (`DIGEST_EMAIL_TO` when it names none); if that digest can't be loaded (503) or has been deleted (409), nothing is sent.
 
+### Changed
+
+- Internal: the email template and sending (`src/email.ts`) and delivering a finished digest (`src/delivery.ts`) moved out of the agent class's file; every email goes through one `sendEmail`. No change in what is sent.
+
 ### Fixed
 
 - `npm test` failed to start (`node --test test/` doesn't find the tests), so `ai-digest deploy` stopped at its test step unless given `--skip-tests`. It now runs the tests, after type-checking the project (`npm run typecheck`, TypeScript in strict mode; the code had type errors nothing checked).
