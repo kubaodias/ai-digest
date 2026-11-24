@@ -5,7 +5,8 @@ Context for a coding agent working in this repository: an AI agent on Telnyx Edg
 | file | what it is | who changes it |
 |---|---|---|
 | `src/index.ts`, `src/router.ts` | The function's entry point and the v1 API (the only HTTP surface) | you |
-| `src/agent.ts` | The agent class: the post-run hook, the `feedback`, `digests` and pool actors, web tool budgets | you |
+| `src/agent.ts` | The agent class: runs (the post-run hook, web tool budgets, the front door), delegating each actor role by method name | you |
+| `src/pool-actor.ts`, `src/feedback-actor.ts`, `src/digests-actor.ts` | The actor roles: a watching digest's pool; votes and sent issues; definitions, the run lease and queued email | you |
 | `src/email.ts`, `src/delivery.ts`, `src/actors.ts`, `src/actor-state.ts` | The email template and sending; delivering a finished digest (pictures, thumbs and talk links, registering the issue); the actors by name; what each actor role keeps in its state | you |
 | `src/profile.ts` | Digest definitions: parsing, validation, the run request | you |
 | `src/instructions.ts` | How the research model researches and writes any digest | you |
