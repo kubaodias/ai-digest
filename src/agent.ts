@@ -19,9 +19,11 @@ import {
 import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
 import { TALK_TTL_S, countTalkTool, type TalkTool, type TalkUsage } from "./talk.ts";
 import {
-  MEMORY_NAMESPACE, errorPage, feedbackLink, forgetVote, rememberVote,
-  nextVote, preferencesFrom, retainIssues, tagItems, TALK_UNTIL_SLACK_MS, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestItemRecord, type DigestRecord, type StoredVote,
+  feedbackLink, nextVote, preferencesFrom, retainIssues, tagItems, TALK_UNTIL_SLACK_MS, verifyPayload, verifyView, viewLink, type DigestItemRecord, type DigestRecord, type StoredVote,
 } from "./feedback.ts";
+import { errorPage, thanksPage, undonePage } from "./feedback-pages.ts";
+import { forgetVote, memorySummaryWait, rememberVote } from "./memory.ts";
+import { telnyxOf } from "./telnyx.ts";
 
 // ai-digest: a research agent on Telnyx Edge Compute that writes email digests
 // on any topic, defined per digest (profile.ts), emails them, and learns from
@@ -82,25 +84,6 @@ async function loadProfile(env: ManagedEnv, id: string): Promise<DigestProfile |
   }
 }
 
-/**
- * The Agent Memory profile summary, current. The service builds it only when
- * asked (`refresh=true`; a plain read of a stale summary returns null and
- * builds nothing), and building takes up to ~40 s, so ask and wait for it.
- */
-async function readMemorySummary(env: ManagedEnv, profile: string, waitMs = 60_000): Promise<string | null> {
-  const url = `/ai/memory/namespaces/${MEMORY_NAMESPACE}/profiles/${encodeURIComponent(profile)}/summary`;
-  const telnyx = env.TELNYX as any;
-  const first: any = await telnyx.get(url, { query: { refresh: "true" } });
-  if (first?.data?.text && !first.data.is_stale) return first.data.text;
-  const until = Date.now() + waitMs;
-  while (Date.now() < until) {
-    await new Promise((r) => setTimeout(r, 5_000));
-    const r: any = await telnyx.get(url);
-    if (r?.data?.text && !r.data.is_stale) return r.data.text;
-  }
-  return first?.data?.text ?? null; // a stale summary beats none
-}
-
 /** Lets tools reach the actor they run in (set right after construction). */
 interface ActorHolder {
   actor?: AiDigest;
@@ -123,7 +106,7 @@ function emailTools(env: ManagedEnv, holder: ActorHolder) {
         } catch (err) {
           out.feedbackError = err instanceof Error ? err.message : String(err);
         }
-        out.memorySummary = await readMemorySummary(env, profile).catch(() => null);
+        out.memorySummary = await memorySummaryWait(telnyxOf(env), profile).catch(() => null);
         console.log(JSON.stringify({ toolCall: "reader_preferences", digest: profile, votes: (out.feedback as any)?.votes ?? 0, shared: (out.shared as any)?.entities?.length ?? 0, memory: out.memorySummary ? "yes" : "none" }));
         return out;
       },
@@ -244,7 +227,7 @@ export class AiDigest extends ManagedAgent {
   /** A check finished: validate and tag its candidates and hand them to the pool. */
   private async deliverCheckReply(reply: string, run: CheckRun) {
     const { candidates, dropped, seen } = parseCheckReply(reply, run);
-    const tags = await tagItems(this.agentEnv.TELNYX as any, candidates.map((c) => ({ headline: c.headline, why: c.summary || c.why })));
+    const tags = await tagItems(telnyxOf(this.agentEnv), candidates.map((c) => ({ headline: c.headline, why: c.summary || c.why })));
     // Variety: at most two candidates about the same product per check.
     const { kept: tagged, capped } = capPerEntity<Candidate>(candidates.map((c, k) => ({ ...c, tags: tags[k]?.tags ?? [], entities: tags[k]?.entities ?? [] })));
     console.log(JSON.stringify({ watch: "check done", digest: run.digest, slot: run.slot, candidates: tagged.length, seen: seen.length, dropped, capped }));
@@ -699,7 +682,7 @@ export class AiDigest extends ManagedAgent {
    * one is kept if that write fails) and the stored vote.
    */
   private async saveVote(id: string, vote: StoredVote, prior: StoredVote | undefined, ctx: { profile: string; digest?: DigestRecord; item?: DigestItemRecord }, write: boolean, via: string) {
-    const telnyx = this.agentEnv.TELNYX as any;
+    const telnyx = telnyxOf(this.agentEnv);
     vote.profile ??= ctx.profile;
     if (ctx.digest?.topic) vote.topic ??= ctx.digest.topic;
     await backfillEntities(telnyx, vote, ctx.item);
@@ -716,7 +699,7 @@ export class AiDigest extends ManagedAgent {
   /** Remove a vote (an undo, from the email or the talk page): its memory, the stored vote, and its memory again later. */
   private async removeVote(id: string, prior: StoredVote | undefined, profile: string, via: string) {
     if (prior) {
-      await forgetVote(this.agentEnv.TELNYX as any, profile, prior.memorySource).catch((err: unknown) => console.log(JSON.stringify({ feedback: "memory delete failed", via, id, error: String(err) })));
+      await forgetVote(telnyxOf(this.agentEnv), profile, prior.memorySource).catch((err: unknown) => console.log(JSON.stringify({ feedback: "memory delete failed", via, id, error: String(err) })));
       await this.save({ votes: { [id]: null } });
       // Ingestion is asynchronous: a memory still being extracted can land after this delete. Delete again later.
       if (prior.memorySource) await this.later(120, "forgetMemorySourceLater", { source: prior.memorySource, profile });
@@ -735,7 +718,7 @@ export class AiDigest extends ManagedAgent {
 
   /** Scheduled after an undo: delete the vote's memory source again, catching memories extracted after the first delete. */
   async forgetMemorySourceLater(p: { source: string; profile?: string }) {
-    await forgetVote(this.agentEnv.TELNYX as any, p.profile ?? LEGACY_PROFILE, p.source).catch(() => undefined);
+    await forgetVote(telnyxOf(this.agentEnv), p.profile ?? LEGACY_PROFILE, p.source).catch(() => undefined);
     console.log(JSON.stringify({ feedback: "memory deleted again", source: p.source }));
   }
 
@@ -929,7 +912,7 @@ export class AiDigest extends ManagedAgent {
     const started = Date.now();
     const from = await secret(this.agentEnv, SECRET.emailFrom);
     try {
-      await sendEmail(this.agentEnv.TELNYX as any, { from, to: [mail.to], subject: mail.subject, text: mail.text, html: mail.html });
+      await sendEmail(telnyxOf(this.agentEnv), { from, to: [mail.to], subject: mail.subject, text: mail.text, html: mail.html });
       console.log(JSON.stringify({ email: "sent", subject: mail.subject, ms: Date.now() - started }));
     } catch (err) {
       console.log(JSON.stringify({ email: "failed", subject: mail.subject, error: err instanceof Error ? err.message : String(err) }));

@@ -12,7 +12,8 @@ Context for a coding agent working in this repository: an AI agent on Telnyx Edg
 | `src/pool.ts`, `src/watch-instructions.ts` | Watching digests (`watch:`): the candidate pool, scoring and send decisions; the check and issue-writing requests | you |
 | `src/talk.ts`, `src/talk-instructions.ts`, `scripts/assistant.mjs` | Talking about an issue: signed links, the browser page and its tools; the voice assistant's prompt; creating the assistant on deploy | you |
 | `src/general.ts` | The built-in General digest's template (one-off topics, `ai-digest ask`) | you |
-| `src/images.ts`, `src/feedback.ts`, `src/preferences.ts`, `src/digest.ts`, `src/config.ts`, `src/auth.ts` | Pictures, feedback, preference scoring, digest detection, settings from secrets, the operator token | you |
+| `src/feedback.ts`, `src/feedback-pages.ts`, `src/memory.ts`, `src/signing.ts`, `src/pages.ts`, `src/telnyx.ts` | Feedback: issue and vote records, thumbs links, tagging; the pages a thumbs click opens; Agent Memory; link signing; the shared page frame; the TELNYX client type | you |
+| `src/images.ts`, `src/preferences.ts`, `src/digest.ts`, `src/config.ts`, `src/auth.ts` | Pictures, preference scoring, digest detection, settings from secrets, the operator token | you |
 | `bin/ai-digest.mjs` | The `ai-digest` command (after `npm link`): dispatches to the scripts | you |
 | `test/*.test.ts` | Regression tests, `npm test` (type-checks with `tsc`, then node:test; no network) | you |
 | `examples/digests/` | Example digest definitions (committed) | you |

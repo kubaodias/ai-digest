@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  addFeedbackLinks, digestItems, feedbackLink, nextVote, parseTags, preferencesFrom, thanksPage, verifyPayload, verifyView, viewLink,
-  type DigestItemRecord, type FeedbackPayload, type StoredVote, type TelnyxClient,
+  addFeedbackLinks, digestItems, feedbackLink, nextVote, parseTags, preferencesFrom, verifyPayload, verifyView, viewLink,
+  type DigestItemRecord, type FeedbackPayload, type StoredVote,
 } from "../src/feedback.ts";
+import { thanksPage } from "../src/feedback-pages.ts";
+import type { TelnyxClient } from "../src/telnyx.ts";
 
 const KEY = "test-key";
 const BASE = "https://agent.example.com/v1/feedback";

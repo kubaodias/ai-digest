@@ -5,6 +5,7 @@
 // pass are kept, at most two per item.
 
 import { digestSections, type Section } from "./digest.ts";
+import type { TelnyxPoster } from "./telnyx.ts";
 
 /** The vision model: hosted by Telnyx, accepts base64 images (checked: Qwen3.8-27B answers in ~2 s). */
 export const VISION_MODEL = "Qwen/Qwen3.8-27B";
@@ -27,11 +28,7 @@ const SKIP = /(logo|icon|avatar|sprite|badge|pixel|spacer|emoji|gravatar|favicon
 const VISION_FORMATS = /^image\/(jpeg|jpg|png|webp|gif)$/i;
 
 /** What `post` needs: the Telnyx client's raw POST (env.TELNYX). */
-export interface TelnyxPoster {
-  post(path: string, opts: { body: unknown }): Promise<any>;
-}
-
-export interface Candidate {
+export interface ImageCandidate {
   url: string;
   alt?: string;
   caption?: string;
@@ -165,9 +162,9 @@ function articleBody(html: string): string {
  * other in-body images, and the og/twitter share image last (it's usually a
  * branded banner).
  */
-export function extractCandidates(html: string, pageUrl: string): Candidate[] {
+export function extractCandidates(html: string, pageUrl: string): ImageCandidate[] {
   const seen = new Set<string>();
-  const make = (raw: string | undefined, c: Omit<Candidate, "url">): Candidate | undefined => {
+  const make = (raw: string | undefined, c: Omit<ImageCandidate, "url">): ImageCandidate | undefined => {
     if (!raw || raw.startsWith("data:")) return undefined;
     let url: string;
     try {
@@ -182,10 +179,10 @@ export function extractCandidates(html: string, pageUrl: string): Candidate[] {
     seen.add(key);
     return { url, ...c };
   };
-  const described = (c: Candidate) => ((c.caption?.length ?? 0) + (c.alt?.length ?? 0)) >= 25;
+  const described = (c: ImageCandidate) => ((c.caption?.length ?? 0) + (c.alt?.length ?? 0)) >= 25;
 
   const body = articleBody(html);
-  const figures: Candidate[] = [];
+  const figures: ImageCandidate[] = [];
   const art = new Set<string | undefined>(); // figures skipped as commissioned art, so the <img> pass doesn't add them back
   for (const m of body.matchAll(/<figure\b[\s\S]*?<\/figure>/gi)) {
     const fig = m[0];
@@ -201,7 +198,7 @@ export function extractCandidates(html: string, pageUrl: string): Candidate[] {
     const c = make(imgUrl(img), { origin: "figure", alt, caption: cap ? strip(cap).slice(0, 300) : undefined });
     if (c) figures.push(c);
   }
-  const imgs: Candidate[] = [];
+  const imgs: ImageCandidate[] = [];
   for (const m of body.matchAll(/<img\b[^>]*>/gi)) {
     const img = m[0];
     if (tooSmall(img) || art.has(imgUrl(img))) continue;
@@ -210,7 +207,7 @@ export function extractCandidates(html: string, pageUrl: string): Candidate[] {
     const c = make(imgUrl(img), { origin: "img", alt });
     if (c) imgs.push(c);
   }
-  const og: Candidate[] = [];
+  const og: ImageCandidate[] = [];
   for (const m of html.matchAll(/<meta\b[^>]*>/gi)) {
     const tag = m[0];
     const prop = (attr(tag, "property") ?? attr(tag, "name") ?? "").toLowerCase();
@@ -299,7 +296,7 @@ function sniff(bytes: Uint8Array, header: string): string | undefined {
   return VISION_FORMATS.test(header) ? header : undefined;
 }
 
-const VISION_PROMPT = (headline: string, context: string, c: Candidate, audience: string) => `You are choosing illustrations for an email digest. Its reader: ${audience}.
+const VISION_PROMPT = (headline: string, context: string, c: ImageCandidate, audience: string) => `You are choosing illustrations for an email digest. Its reader: ${audience}.
 
 News item: ${headline}
 Summary: ${context || "(none)"}
@@ -315,7 +312,7 @@ The caption tells the reader what the image shows about the item: the numbers, s
 
 Answer with JSON only, no prose: {"score": <0-10>, "kind": "<chart|diagram|screenshot|photo|banner|logo|stock|illustration|other>", "caption": "<one sentence, max 20 words>"}`;
 
-async function judge(telnyx: TelnyxPoster, dataUrl: string, headline: string, context: string, c: Candidate, audience: string): Promise<{ score: number; kind: string; caption: string }> {
+async function judge(telnyx: TelnyxPoster, dataUrl: string, headline: string, context: string, c: ImageCandidate, audience: string): Promise<{ score: number; kind: string; caption: string }> {
   const call = telnyx.post("/ai/chat/completions", {
     body: {
       model: VISION_MODEL,
@@ -405,7 +402,7 @@ async function resolveArticle(link: string): Promise<string | undefined> {
   return typeof url === "string" && /^https?:\/\//.test(url) ? url : undefined;
 }
 
-async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+async function mapLimit<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
@@ -431,7 +428,7 @@ export async function addImages(telnyx: TelnyxPoster, markdown: string, log: Log
     if (!seen.has(article)) seen.set(article, pickImages(telnyx, article, s.headline, s.context, log, audience));
     return seen.get(article)!;
   };
-  const report = await pool(sections, CONCURRENCY, async (s): Promise<ItemImages> => {
+  const report = await mapLimit(sections, CONCURRENCY, async (s): Promise<ItemImages> => {
     for (const link of s.links.slice(0, 2)) {
       if (Date.now() > deadline) return { headline: s.headline, images: [], note: "time budget spent" };
       let article = link;

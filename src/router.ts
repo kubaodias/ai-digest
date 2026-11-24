@@ -34,6 +34,8 @@ import { TALK_TTL_S, addTalkLinks, hasTalkLinks, issueTalkLink, readArticle, reb
 import { verifyPayload, verifyView, type DigestRecord } from "./feedback.ts";
 import { emailBody, talkPage } from "./talk-page.ts";
 import { sendEmail } from "./email.ts";
+import { memoryCounts, memorySummaryNow } from "./memory.ts";
+import type { TelnyxClient, TelnyxPoster } from "./telnyx.ts";
 import { DIGESTS_CONVERSATION, FEEDBACK_CONVERSATION, poolConversation, type ActorNamespace } from "./actors.ts";
 
 export const VERSION = "0.6.2";
@@ -42,11 +44,10 @@ export const VERSION = "0.6.2";
 export interface RouterEnv {
   AI_DIGEST: ActorNamespace;
   SECRETS?: SecretStore;
-  TELNYX?: { get(path: string, opts?: unknown): Promise<any>; post(path: string, opts: { body: unknown }): Promise<any> };
+  TELNYX?: Pick<TelnyxClient, "get" | "post">;
   [k: string]: unknown;
 }
 
-const MEMORY = "/ai/memory/namespaces/ai-digest/profiles";
 
 /** The digests page, with what it needs from the actors, Agent Memory and Email. */
 async function appRoute(req: Request, env: RouterEnv): Promise<Response> {
@@ -60,16 +61,8 @@ async function appRoute(req: Request, env: RouterEnv): Promise<Response> {
     digests: env.AI_DIGEST.idFromName(DIGESTS_CONVERSATION),
     feedback: env.AI_DIGEST.idFromName(FEEDBACK_CONVERSATION),
     memory: {
-      async counts() {
-        const r = await t!.get(MEMORY);
-        return Object.fromEntries((r?.data ?? []).map((p: any) => [p.profile_id, p.memory_count]));
-      },
-      async summary(profile: string) {
-        const r = await t!.get(`${MEMORY}/${encodeURIComponent(profile)}/summary`);
-        // Agent Memory builds a summary only when asked: ask for next time when it's missing or stale.
-        if (!r?.data?.text || r?.data?.is_stale) await t!.get(`${MEMORY}/${encodeURIComponent(profile)}/summary`, { query: { refresh: "true" } }).catch(() => undefined);
-        return r?.data?.text ?? null;
-      },
+      counts: () => memoryCounts(t!),
+      summary: (profile: string) => memorySummaryNow(t!, profile),
     },
     pool: (id) => env.AI_DIGEST.idFromName(poolConversation(id)).poolView(),
     async sendEmail(to, subject, text, html) {
@@ -143,7 +136,8 @@ async function talkRoute(req: Request, env: RouterEnv, path: string, method: str
   const record = await feedback.issueRecord(claim.d);
   if (!record) return json(404, { error: "issue_gone" });
   const item = record.items.find((i: { n: number }) => i.n === Number(args.story));
-  const telnyx = env.TELNYX as any;
+  // Without the binding a tool call throws below and the page gets the error.
+  const telnyx = env.TELNYX as TelnyxPoster;
   const started = Date.now();
   try {
     // Searches and article reads cost money: limited per issue and per deployment each day (TALK_LIMITS).

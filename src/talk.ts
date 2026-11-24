@@ -7,7 +7,9 @@
 // token, so the assistant itself holds no credential and anyone without a
 // link gets nothing from our tools.
 
-import { b64url, fromB64url, hmac, type DigestItemRecord, type DigestRecord, type TelnyxClient } from "./feedback.ts";
+import type { DigestItemRecord, DigestRecord } from "./feedback.ts";
+import { b64url, fromB64url, hmac } from "./signing.ts";
+import type { TelnyxPoster } from "./telnyx.ts";
 import { ARTICLE_NOTES_PROMPT } from "./talk-instructions.ts";
 
 /** How long a talk link works. */
@@ -173,7 +175,7 @@ export function headerValue(s: string, max = 400): string {
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…" : s);
 
 /** read_article: fetch the story's article and condense it into notes to talk from. */
-export async function readArticle(telnyx: TelnyxClient, item: DigestItemRecord, focus?: string) {
+export async function readArticle(telnyx: TelnyxPoster, item: DigestItemRecord, focus?: string) {
   if (!item.url) return { story: item.n, note: "This story has no article link." };
   const res: any = await telnyx.post("/web_search/contents", { body: { urls: [item.url], formats: ["markdown", "metadata"] } });
   const page = res?.data?.results?.[0];
@@ -193,7 +195,7 @@ export async function readArticle(telnyx: TelnyxClient, item: DigestItemRecord, 
 }
 
 /** search_web: a few results with excerpts, for questions the article doesn't answer. */
-export async function searchWeb(telnyx: TelnyxClient, query: string) {
+export async function searchWeb(telnyx: TelnyxPoster, query: string) {
   const res: any = await telnyx.post("/web_search", { body: { query: clip(query, 300), count: 5 } });
   const all = [...(res?.data?.results?.web ?? []), ...(res?.data?.results?.news ?? [])].slice(0, 6);
   const results = all.map((r: any) => {
