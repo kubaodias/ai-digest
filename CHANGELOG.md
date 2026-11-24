@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- `npm test` failed to start (`node --test test/` doesn't find the tests), so `ai-digest deploy` stopped at its test step unless given `--skip-tests`. It now runs the tests, after type-checking the project (`npm run typecheck`, TypeScript in strict mode; the code had type errors nothing checked).
+- `npm run screenshots` built the digests list from the removed `schedule` setting; it uses `watch`.
 - An issue's links (thumbs, sign-in, the digests page) could point to another function on the same Telnyx account. Telnyx secrets belong to the account and are matched by name, and another project's deploy had replaced `PUBLIC_URL`. The deploy now stores ai-digest's secrets with the function's prefix (`AI_DIGEST_PUBLIC_URL`, …) and binds them under their usual names. A deployment whose link-signing key exists only as `FEEDBACK_KEY` keeps it under that name, so links already sent keep working; likewise an `ADMIN_EMAIL` that exists only under its old name keeps being used.
 - The feedback actor kept only the 12 newest issues across all digests, so with several digests a talk link could stop working well before its 30 days. Issues older than the newest 12 now stay, without their email HTML (the page is built from the stories), for as long as their links last (including links added by a resend or minted when the page is opened), up to 200.
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TALK_LIMITS, spendTalkTool, addTalkLinkText, addTalkLinks, rebaseLinks, digestName, headerValue, issueBrief, talkLinks, talkToken, verifyTalkToken } from "../src/talk.ts";
+import { TALK_LIMITS, countTalkTool, addTalkLinkText, addTalkLinks, hasTalkLinks, issueTalkLink, rebaseLinks, digestName, headerValue, issueBrief, talkLinks, talkToken, verifyTalkToken } from "../src/talk.ts";
 import { talkGreeting } from "../src/talk-instructions.ts";
 import { thumbsRow, type DigestRecord } from "../src/feedback.ts";
 import { renderEmailHtml } from "../src/agent.ts";
@@ -49,11 +49,9 @@ test("what the assistant gets: digest name, weekday, stories with numbers for to
     ],
   };
   assert.equal(digestName(record.subject), "Agent Memory");
-  const b = issueBrief(record, 2);
+  const b = issueBrief(record);
   assert.equal(b.sent, "Tuesday");
   assert.deepEqual(b.stories.map((s) => s.story), [1, 2]);
-  assert.deepEqual(b.start_with, { story: 2, headline: "Zep's benchmark" });
-  assert.equal(issueBrief(record).start_with, undefined);
   assert.equal(talkGreeting("Agent Memory", "Tuesday", 7), "Agent Memory, Tuesday's issue: 7 stories. Say go and I'll read the headlines first, or ask me about any of them.");
   assert.doesNotMatch(talkGreeting("Agent Memory", "Tuesday", 7, "Zep's benchmark"), /item|story \d|number/i);
 });
@@ -83,17 +81,17 @@ test("talk page: takes the issue out of the email it was sent as, and out of ema
 test("talk tool limits: per issue and for the deployment, per UTC day; shared use can't overspend", () => {
   const use = { day: "", total: {}, issues: {} };
   const day1 = new Date("2026-11-23T10:00:00Z"), day2 = new Date("2026-11-24T00:00:01Z");
-  for (let k = 0; k < TALK_LIMITS.issue.read_article; k++) assert.equal(spendTalkTool(use, "a", "read_article", day1), undefined);
-  assert.match(spendTalkTool(use, "a", "read_article", day1)!, /for this issue is used up/);
-  assert.equal(spendTalkTool(use, "a", "search_web", day1), undefined, "each tool has its own count");
-  assert.equal(spendTalkTool(use, "b", "read_article", day1), undefined, "another issue has its own count");
+  for (let k = 0; k < TALK_LIMITS.issue.read_article; k++) assert.equal(countTalkTool(use, "a", "read_article", day1), undefined);
+  assert.match(countTalkTool(use, "a", "read_article", day1)!, /for this issue is used up/);
+  assert.equal(countTalkTool(use, "a", "search_web", day1), undefined, "each tool has its own count");
+  assert.equal(countTalkTool(use, "b", "read_article", day1), undefined, "another issue has its own count");
   // The deployment-wide limit holds across issues.
   let refused: string | undefined;
-  for (let k = 0; k < TALK_LIMITS.total.search_web && !refused; k++) refused = spendTalkTool(use, `i${k % 9}`, "search_web", day1);
-  assert.match(refused ?? spendTalkTool(use, "z", "search_web", day1)!, /daily limit of web searches is used up/);
+  for (let k = 0; k < TALK_LIMITS.total.search_web && !refused; k++) refused = countTalkTool(use, `i${k % 9}`, "search_web", day1);
+  assert.match(refused ?? countTalkTool(use, "z", "search_web", day1)!, /daily limit of web searches is used up/);
   assert.equal((use as any).total.search_web, TALK_LIMITS.total.search_web);
   // A new day starts over.
-  assert.equal(spendTalkTool(use, "a", "read_article", day2), undefined);
+  assert.equal(countTalkTool(use, "a", "read_article", day2), undefined);
   assert.deepEqual((use as any).total, { read_article: 1 });
 });
 
@@ -140,4 +138,13 @@ test("talk page: the page's script parses as a module (it ships as a string no o
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("talk links in an issue: found, and the issue's own link is the first one", async () => {
+  const links = await talkLinks(KEY, "https://digest.example.com/v1/talk", "20261116-ab12", [{ n: 1 }, { n: 2 }]);
+  const out = addTalkLinks(email, links);
+  assert.equal(hasTalkLinks(email), false);
+  assert.equal(issueTalkLink(email), undefined);
+  assert.equal(hasTalkLinks(out), true);
+  assert.equal(issueTalkLink(out), links.issue);
 });

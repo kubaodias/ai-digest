@@ -330,8 +330,8 @@ function discuss(n) {
 const tools = {
   // The story this call started on (a story's link or its Discuss button), as start_with.
   get_issue: () => {
-    const { start_with, ...brief } = D.brief, it = callStory && byN.get(callStory);
-    return it ? { ...brief, start_with: { story: it.n, headline: it.headline } } : brief;
+    const it = callStory && byN.get(callStory);
+    return it ? { ...D.brief, start_with: { story: it.n, headline: it.headline } } : D.brief;
   },
   show_story: ({ story } = {}) => { highlight(Number(story), true); return { ok: true }; },
   read_article: async (a) => { highlight(Number(a?.story), true); return api("read_article", a); },
@@ -339,9 +339,11 @@ const tools = {
   record_vote: (a) => sections.has(Number(a?.story)) ? enqueue(Number(a.story), () => api("record_vote", a), "Saved by voice") : api("record_vote", a),
 };
 let agent, callStory = null, gen = 0, closing = Promise.resolve(), call, live = false, busy = false, muted = false, failTimer, wake, agentState = "listening";
+// The browser blocked the assistant's audio from playing by itself: the Start button then plays it.
+let blocked = false;
 const set = (s) => { dock.dataset.s = s; };
 function phase(p) {
-  live = p === "live";
+  live = p === "live"; blocked = false;
   go.hidden = p === "live" || p === "connecting";
   muteBtn.hidden = !live;
   endBtn.hidden = !(live || p === "connecting");
@@ -374,7 +376,7 @@ let r = 0, y = 0, turn = 0;
   ring.style.transform = "scale(" + (1 + y * 0.25).toFixed(3) + ")";
   requestAnimationFrame(frame);
 })(0);
-function play() { audio.play().then(() => ctx?.resume()).catch(() => { set("idle"); go.hidden = false; go.textContent = "Tap to hear"; }); }
+function play() { audio.play().then(() => ctx?.resume()).catch(() => { blocked = true; set("idle"); go.hidden = false; go.textContent = "Tap to hear"; }); }
 function reason(e) {
   const m = String(e?.name ?? "") + " " + String(e?.message ?? e);
   if (/NotAllowed|Permission|denied/i.test(m)) return "Microphone access is blocked: allow it for this site and try again.";
@@ -448,7 +450,7 @@ function setMuted(on) {
 }
 muteBtn.addEventListener("click", () => { if (!call) return; vibe(10); setMuted(!muted); try { muted ? call.muteAudio() : call.unmuteAudio(); } catch {} set(muted ? "muted" : agentState); });
 endBtn.addEventListener("click", () => { vibe([10, 60, 10]); teardown(live ? "ended" : "idle"); });
-go.addEventListener("click", () => { if (go.textContent === "Tap to hear") { ctx?.resume(); audio.play().catch(() => {}); go.hidden = true; set(agentState); return; } start(active ?? undefined); });
+go.addEventListener("click", () => { if (blocked) { blocked = false; ctx?.resume(); audio.play().catch(() => {}); go.hidden = true; set(agentState); return; } start(active ?? undefined); });
 // From a talk link: go to the story and start talking. From a thumbs click or the view link: show the story, don't start.
 if (D.autostart) { if (D.start && sections.has(D.start)) { touched = 0; start(D.start); } else start(); }
 else if (D.start && sections.has(D.start)) { sections.get(D.start).sec.scrollIntoView({ block: "start" }); if (D.voted) toast("Thanks, your vote is saved"); }

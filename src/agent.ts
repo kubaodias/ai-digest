@@ -15,7 +15,7 @@ import {
   type Candidate, type Decision, type PoolEntry, type RunLease, type Sighting,
 } from "./pool.ts";
 import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
-import { TALK_TTL_S, spendTalkTool, type TalkTool, type TalkUsage, addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
+import { TALK_TTL_S, countTalkTool, type TalkTool, type TalkUsage, addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
 import {
   FEEDBACK_CONVERSATION, MEMORY_NAMESPACE, addFeedbackLinks, feedbackBase, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, retainIssues, tagItems, TALK_UNTIL_SLACK_MS, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestItemRecord, type DigestRecord, type StoredVote,
@@ -49,11 +49,11 @@ const spec: ManagedAgentSpec = {
 /** The footer logo (the Telnyx mark, 200x200 PNG). */
 const LOGO_URL = "https://www.activepieces.com/piece-icon/telnyx";
 
-/** Markdown → an email-safe HTML document (inline styles; Gmail drops most <style> rules). */
 /** Marks around the issue in the email, so the talk page can take it out without depending on the layout. */
 export const ISSUE_START = "<!--ai-digest:issue-->";
 export const ISSUE_END = "<!--/ai-digest:issue-->";
 
+/** Markdown → an email-safe HTML document (inline styles; Gmail drops most <style> rules). */
 export function renderEmailHtml(markdown: string, subject: string): string {
   const body = (marked.parse(markdown, { async: false, gfm: true, breaks: true }) as string)
     .replace(/<h1>/g, '<h1 style="font-size:24px;line-height:1.3;margin:0 0 20px;color:#111827;">')
@@ -169,7 +169,7 @@ function emailTools(env: ManagedEnv, holder: ActorHolder) {
         "This digest's reader preferences, learned from their thumbs feedback: `feedback` from this digest's own past issues (entity preferences: apply strictly; topic preferences with enough evidence: apply softly; tentative topics: ignore; recent votes with reasons), `shared` entity preferences from the reader's other digests (see its guidance), and a memory summary. Call once before researching.",
       inputSchema: z.object({}),
       execute: async () => {
-        const profile = profileIdOf(holder.actor?.conversationName()) ?? LEGACY_PROFILE;
+        const profile = profileIdOf(holder.actor?.conversation) ?? LEGACY_PROFILE;
         const topic = profile === GENERAL_ID ? (await holder.actor?.generalRun())?.topic : undefined;
         const out: Record<string, unknown> = { digest: profile, ...(topic ? { topic } : {}) };
         try {
@@ -261,8 +261,19 @@ async function sendDigestEmail(
   }
 }
 
+// rememberRun (below) extends ManagedAgent's post-run hook, which @telnyx/acp's types mark private
+// (as is conversationName, read through `conversation`). Overriding it is deliberate.
+// @ts-expect-error TS2415: overrides the private rememberRun.
 export class AiDigest extends ManagedAgent {
   private readonly agentEnv: ManagedEnv;
+
+  /**
+   * This actor's conversation name (ManagedAgent's conversationName(), private in its types);
+   * undefined when the actor's id doesn't decode to one.
+   */
+  get conversation(): string | undefined {
+    return (this as unknown as { conversationName(): string }).conversationName();
+  }
 
   constructor(ctx: ConstructorParameters<typeof ManagedAgent>[0], env: ManagedEnv) {
     const holder: ActorHolder = {};
@@ -282,7 +293,8 @@ export class AiDigest extends ManagedAgent {
    */
   protected override toolEnv(): ReturnType<ManagedAgent["toolEnv"]> {
     const base = super.toolEnv();
-    const budget = toolBudget(this.conversationName());
+    // A conversation without a name is neither a check nor an issue: no budget (toolBudget needs a string).
+    const budget = toolBudget(this.conversation ?? "");
     const telnyx = base.TELNYX;
     if (!budget || !telnyx) return base;
     return {
@@ -293,7 +305,7 @@ export class AiDigest extends ManagedAgent {
           if (this.toolUse.run !== run) this.toolUse = { run, search: 0, fetch: 0 };
           const refused = spendTool(budget, this.toolUse, path);
           if (refused) {
-            console.log(JSON.stringify({ toolBudget: "refused", conversation: this.conversationName(), path, used: this.toolUse }));
+            console.log(JSON.stringify({ toolBudget: "refused", conversation: this.conversation, path, used: this.toolUse }));
             return Promise.reject(new Error(refused)) as PromiseLike<T>;
           }
           return telnyx.post<T>(path, opts);
@@ -311,7 +323,7 @@ export class AiDigest extends ManagedAgent {
    */
   override async authorize(token?: string, _req?: Request): Promise<any> {
     const claims = await claimsFor(token, await secret(this.agentEnv, SECRET.authKey));
-    if (!claims.length) console.log(JSON.stringify({ auth: "refused", conversation: this.conversationName() ?? null, token: token ? "wrong" : "none" }));
+    if (!claims.length) console.log(JSON.stringify({ auth: "refused", conversation: this.conversation ?? null, token: token ? "wrong" : "none" }));
     return claims;
   }
 
@@ -384,8 +396,8 @@ export class AiDigest extends ManagedAgent {
   // ── watching: the pool actor, "<digest>--pool" ──
 
   private poolDigest(): string {
-    const id = profileIdOf(this.conversationName());
-    if (!id || this.conversationName() !== poolConversation(id)) throw new Error("not a pool actor");
+    const id = profileIdOf(this.conversation);
+    if (!id || this.conversation !== poolConversation(id)) throw new Error("not a pool actor");
     return id;
   }
 
@@ -406,8 +418,8 @@ export class AiDigest extends ManagedAgent {
   /**
    * Arm or cancel this digest's watch timer from its definition: called when a
    * definition is stored or deleted, and by every deploy (which pushes every
-   * definition), so a lost timer comes back. The first check runs a minute after
-   * watching is turned on.
+   * definition), so a lost timer comes back. The first check runs 1–16 minutes
+   * after watching is turned on (firstCheckDelayS).
    */
   async poolConfigure() {
     const id = this.poolDigest();
@@ -694,7 +706,7 @@ export class AiDigest extends ManagedAgent {
    */
   async rememberRun(runId: string, before: number) {
     await (ManagedAgent.prototype as any).rememberRun.call(this, runId, before);
-    const conversation = this.conversationName();
+    const conversation = this.conversation;
     if (conversation === FEEDBACK_CONVERSATION || conversation === DIGESTS_CONVERSATION) return;
     try {
       const started = Number(runId.match(/-(\d{13})-/)?.[1] ?? 0);
@@ -730,7 +742,7 @@ export class AiDigest extends ManagedAgent {
    * managed loop's front door, which needs the operator token.
    */
   override async fetch(req: Request): Promise<Response> {
-    if (req.method === "GET" && this.conversationName() === FEEDBACK_CONVERSATION) {
+    if (req.method === "GET" && this.conversation === FEEDBACK_CONVERSATION) {
       const url = new URL(req.url);
       const asset = url.searchParams.get("asset");
       if (asset === "thumb-up.png" || asset === "thumb-down.png") {
@@ -741,7 +753,7 @@ export class AiDigest extends ManagedAgent {
       if (url.searchParams.has("p")) return this.onFeedback(url);
     }
     if (!(await mayUseFrontDoor(req, await secret(this.agentEnv, SECRET.authKey)))) {
-      console.log(JSON.stringify({ auth: "refused", conversation: this.conversationName() ?? null, path: new URL(req.url).pathname }));
+      console.log(JSON.stringify({ auth: "refused", conversation: this.conversation ?? null, path: new URL(req.url).pathname }));
       return new Response(JSON.stringify({ error: "unauthorized", message: "this agent needs the operator token (telnyx-acp sends it)" }), {
         status: 403,
         headers: { "content-type": "application/json" },
@@ -889,12 +901,6 @@ export class AiDigest extends ManagedAgent {
     return { ok: true };
   }
 
-  /**
-   * A vote from the talk page: by voice (the assistant's record_vote) or a 👍/👎 or reason tapped
-   * on the page. Recorded like a thumbs click on the item, into the same log and Agent Memory
-   * profile. A reason (r, and x for "entity") toggles on the current vote; undo removes the vote.
-   * Called in-process by the router; not @rpc.
-   */
   /** Today's paid talk-tool use, loaded once per instance and shared, so concurrent checks see each other. */
   private talkUse?: Promise<TalkUsage>;
 
@@ -910,7 +916,7 @@ export class AiDigest extends ManagedAgent {
     const use = await this.talkUse;
     const before = use.day;
     // Checked and counted with no await in between: concurrent calls can't both take the last one.
-    const refused = spendTalkTool(use, issue, tool);
+    const refused = countTalkTool(use, issue, tool);
     if (refused) console.log(JSON.stringify({ talk: "tool limit", tool, issue, day: use.day }));
     else {
       // A new day starts from nothing: clear the stored counts first (setState merges objects).
@@ -920,6 +926,12 @@ export class AiDigest extends ManagedAgent {
     return refused;
   }
 
+  /**
+   * A vote from the talk page: by voice (the assistant's record_vote) or a 👍/👎 or reason tapped
+   * on the page. Recorded like a thumbs click on the item, into the same log and Agent Memory
+   * profile. A reason (r, and x for "entity") toggles on the current vote; undo removes the vote.
+   * Called in-process by the router; not @rpc.
+   */
   async talkVote(p: { d: string; i: number; v: "up" | "down"; r?: string; x?: number; undo?: boolean; via?: string }) {
     const state: any = await (this as any).getState();
     const digest: DigestRecord | undefined = state?.digests?.[p.d];
@@ -1044,7 +1056,6 @@ export class AiDigest extends ManagedAgent {
     }
   }
 
-  /** Sign-in links: at most one a minute. Called in-process by the page. */
   /** The run lease (one check or issue at a time across digests; pool.ts). Called in-process by pool actors. */
   async claimRun(owner: string, from?: string) {
     const state: any = await (this as any).getState();
@@ -1059,6 +1070,7 @@ export class AiDigest extends ManagedAgent {
     return { released: releasesLease(state?.runLease, owner) };
   }
 
+  /** Sign-in links: at most one a minute. Called in-process by the page. */
   async magicRequested(now: number) {
     const state: any = await (this as any).getState();
     const last = state?.magicRequestedAt ?? 0;

@@ -8,7 +8,7 @@
 // link gets nothing from our tools.
 
 import { b64url, fromB64url, hmac, type DigestItemRecord, type DigestRecord, type TelnyxClient } from "./feedback.ts";
-import { ARTICLE_NOTES_PROMPT, DEFAULT_GREETING, talkGreeting } from "./talk-instructions.ts";
+import { ARTICLE_NOTES_PROMPT } from "./talk-instructions.ts";
 
 /** How long a talk link works. */
 export const TALK_TTL_S = 30 * 24 * 3600;
@@ -29,10 +29,10 @@ export interface TalkUsage {
 }
 
 /**
- * Spend one use of a paid tool for an issue: undefined when allowed (and counted), else what the assistant
+ * Count one use of a paid tool for an issue: undefined when allowed (and counted), else what the assistant
  * should tell the listener. Mutates `use` synchronously, so callers sharing one object can't overspend.
  */
-export function spendTalkTool(use: TalkUsage, issue: string, tool: TalkTool, now = new Date()): string | undefined {
+export function countTalkTool(use: TalkUsage, issue: string, tool: TalkTool, now = new Date()): string | undefined {
   const day = now.toISOString().slice(0, 10);
   if (use.day !== day) Object.assign(use, { day, total: {}, issues: {} });
   const mine = (use.issues[issue] ??= {});
@@ -98,13 +98,21 @@ const STORY_LINK = (href: string) =>
 /** The "Useful? 👍 👎" row closing each item (feedback.ts thumbsRow), as rendered. */
 const THUMBS_ROW = /(<span[^>]*>Useful\?<\/span>(?:\s*<a\b[^>]*>[\s\S]*?<\/a>){2})/g;
 
+/** Whether an issue (its HTML or text) already has talk links. */
+export const hasTalkLinks = (s: string): boolean => s.includes("/v1/talk?t=");
+
+/** The issue's own talk link in its HTML: the first one (the button under the title). */
+export function issueTalkLink(html: string): string | undefined {
+  return html.match(/href="([^"]*\/v1\/talk\?t=[^"]*)"/)?.[1];
+}
+
 /**
  * The email's HTML with a "Talk about this issue" button under the title and
  * a "Discuss" link in each story's thumbs row. Works on a stored issue's HTML
  * too; HTML that already has talk links is returned unchanged.
  */
 export function addTalkLinks(html: string, links: { issue: string; stories: string[] }): string {
-  if (html.includes("/v1/talk?t=")) return html;
+  if (hasTalkLinks(html)) return html;
   let k = 0;
   let out = html.replace(THUMBS_ROW, (row) => {
     const href = links.stories[k++];
@@ -126,7 +134,7 @@ export function rebaseLinks(html: string, publicUrl: string): string {
 
 /** The plain-text part: the talk link first. */
 export function addTalkLinkText(text: string, issueLink: string): string {
-  return text.includes("/v1/talk?t=") ? text : `🎧 Talk about this issue: ${issueLink}\n\n${text}`;
+  return hasTalkLinks(text) ? text : `🎧 Talk about this issue: ${issueLink}\n\n${text}`;
 }
 
 // ── the issue as the assistant sees it ───────────────────────────────────────
@@ -136,15 +144,13 @@ export function digestName(subject: string): string {
   return subject.split(/\s+[—–-]\s+/)[0]!.trim() || subject;
 }
 
-export function issueBrief(record: DigestRecord, start?: number) {
+export function issueBrief(record: DigestRecord) {
   const day = new Date(record.sentAt).toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
-  const startItem = start !== undefined ? record.items.find((i) => i.n === start) : undefined;
   return {
     digest: digestName(record.subject),
     subject: record.subject,
     sent: day,
     stories: record.items.map((i) => ({ story: i.n, headline: i.headline, summary: i.why, source: i.source })),
-    ...(startItem ? { start_with: { story: startItem.n, headline: startItem.headline } } : {}),
   };
 }
 
@@ -200,5 +206,3 @@ export async function searchWeb(telnyx: TelnyxClient, query: string) {
   });
   return { results };
 }
-
-export { DEFAULT_GREETING };

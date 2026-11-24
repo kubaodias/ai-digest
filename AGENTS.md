@@ -13,7 +13,7 @@ Context for a coding agent working in this repository: an AI agent on Telnyx Edg
 | `src/general.ts` | The built-in General digest's template (one-off topics, `ai-digest ask`) | you |
 | `src/images.ts`, `src/feedback.ts`, `src/preferences.ts`, `src/digest.ts`, `src/config.ts`, `src/auth.ts` | Pictures, feedback, preference scoring, digest detection, settings from secrets, the operator token | you |
 | `bin/ai-digest.mjs` | The `ai-digest` command (after `npm link`): dispatches to the scripts | you |
-| `test/*.test.ts` | Regression tests, `npm test` (node:test, no network) | you |
+| `test/*.test.ts` | Regression tests, `npm test` (type-checks with `tsc`, then node:test; no network) | you |
 | `examples/digests/` | Example digest definitions (committed) | you |
 | `digests/` | The deployer's own digest definitions; git-ignored | the person deploying |
 | `docs/` | Setup and design docs, screenshots (`ai-digest screenshots`), memory summary instructions | you |

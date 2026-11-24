@@ -67,7 +67,7 @@ const server = http.createServer(async (req, res) => {
   ];
   const summaries = stored.map((d) => {
     const p = parseProfile(d.id, d.markdown);
-    return { id: d.id, title: p.title, windowDays: p.windowDays, items: p.items, schedule: p.schedule ?? null, updatedAt: d.updatedAt, versions: d.versions };
+    return { id: d.id, title: p.title, windowDays: p.windowDays, items: p.items, watch: p.watch ?? null, updatedAt: d.updatedAt, versions: d.versions };
   });
   if (url.pathname === "/app") return send(await listPage(summaries, { issues, votes: { "agent-memory": 3, "ai-swe": 5, __general: 2 } }, { "agent-memory": 4, "ai-swe": 8, __general: 2 }).text(), "text/html");
   if (url.pathname === "/app-digest") {
@@ -87,12 +87,12 @@ base = `http://127.0.0.1:${(server.address() as any).port}`;
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: true });
 const page = await browser.newPage();
-async function shoot(path: string, file: string, width: number, clip?: (p: typeof page) => Promise<{ y: number; height: number }>) {
+async function shoot(path: string, file: `${string}.png`, width: number, clip?: (p: typeof page) => Promise<{ y: number; height: number }>) {
   await page.setViewport({ width, height: 1000, deviceScaleFactor: 2 });
   await page.goto(base + path, { waitUntil: "networkidle0", timeout: 90_000 });
   await page.evaluate(() => Promise.all([...document.images].map((i) => i.decode().catch(() => {}))));
   const c = clip ? await clip(page) : undefined;
-  await page.screenshot({ path: OUT + file, ...(c ? { clip: { x: 0, y: c.y, width, height: c.height } } : { fullPage: true }) });
+  await page.screenshot({ path: `${OUT}${file}`, ...(c ? { clip: { x: 0, y: c.y, width, height: c.height } } : { fullPage: true }) });
   console.log("wrote docs/images/" + file);
 }
 const headingTop = (text: string) => async (p: typeof page) => ({

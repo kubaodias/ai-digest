@@ -43,6 +43,9 @@ export interface PickedImage {
   kind: string;
 }
 
+/** A picture the vision model judged, with what distinctPicks needs: its shape and whether it is the page's og:image. */
+type JudgedImage = PickedImage & { shape: string | undefined; og: boolean };
+
 export interface ItemImages {
   headline: string;
   article?: string;
@@ -345,7 +348,7 @@ export async function pickImages(telnyx: TelnyxPoster, article: string, headline
   const candidates = extractCandidates(html, page.finalUrl).slice(0, MAX_CANDIDATES);
   log({ images: "candidates", article, count: candidates.length });
   const judged = await Promise.all(
-    candidates.map(async (c) => {
+    candidates.map(async (c): Promise<JudgedImage | undefined> => {
       try {
         const img = await fetchLimited(c.url, IMAGE_TIMEOUT_MS, MAX_IMAGE_BYTES, "image/avif;q=0,image/webp,image/png,image/jpeg,image/*;q=0.8");
         const type = sniff(img.bytes, img.type);
@@ -364,7 +367,7 @@ export async function pickImages(telnyx: TelnyxPoster, article: string, headline
       }
     }),
   );
-  const good = judged.filter((j): j is PickedImage & { shape?: string; og?: boolean } => !!j && usable(j)).sort((a, b) => b.score - a.score);
+  const good = judged.filter((j): j is JudgedImage => !!j && usable(j)).sort((a, b) => b.score - a.score);
   return distinctPicks(good).slice(0, MAX_IMAGES_PER_ITEM).map(({ shape, og, ...im }) => im);
 }
 
