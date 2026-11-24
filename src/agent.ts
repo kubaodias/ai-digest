@@ -1,11 +1,12 @@
 import { ManagedAgent, type ManagedAgentSpec, type ManagedEnv } from "@telnyx/acp/managed";
+import type { AiDigestState, CheckRun, Patch, PoolMeta } from "./actor-state.ts";
 import { tool } from "ai";
 import { z } from "zod";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { THUMB_DOWN_PNG_BASE64, THUMB_UP_PNG_BASE64 } from "./assets.ts";
 import { DOWN_REASONS, ENTITY_OPTIONS, UP_REASONS, selectionsOf, sharedEntityPrefs, validEntityIndex, validReason } from "./preferences.ts";
 import { digestFromReply } from "./digest.ts";
-import { DIGESTS_CONVERSATION, digestsActor, feedbackActor, poolActor, poolConversation } from "./actors.ts";
+import { DIGESTS_CONVERSATION, FEEDBACK_CONVERSATION, actorNamed, digestsActor, feedbackActor, poolActor, poolConversation } from "./actors.ts";
 import { sendDigestEmail } from "./delivery.ts";
 import { sendEmail } from "./email.ts";
 import { SECRET, feedbackKey, secret } from "./config.ts";
@@ -13,12 +14,12 @@ import { GENERAL_ID, LEGACY_PROFILE, generalProfile, parseProfile, profileIdOf, 
 import { claimsFor, mayUseFrontDoor } from "./auth.ts";
 import {
   canonicalUrl, capPerEntity, claimLease, decide, housekeep, leaseWaitS, mergeCandidates, parseCheckReply, releasesLease, rescore, watchSettings, slotOf,
-  type Candidate, type Decision, type PoolEntry, type RunLease, type Sighting,
+  type Candidate, type Decision, type PoolEntry, type Sighting,
 } from "./pool.ts";
 import { quietNote, checkMessage, spendTool, toolBudget, writerMessage } from "./watch-instructions.ts";
 import { TALK_TTL_S, countTalkTool, type TalkTool, type TalkUsage } from "./talk.ts";
 import {
-  FEEDBACK_CONVERSATION, MEMORY_NAMESPACE, errorPage, feedbackLink, forgetVote, rememberVote,
+  MEMORY_NAMESPACE, errorPage, feedbackLink, forgetVote, rememberVote,
   nextVote, preferencesFrom, retainIssues, tagItems, TALK_UNTIL_SLACK_MS, thanksPage, undonePage, verifyPayload, verifyView, viewLink, type DigestItemRecord, type DigestRecord, type StoredVote,
 } from "./feedback.ts";
 
@@ -136,12 +137,22 @@ function emailTools(env: ManagedEnv, holder: ActorHolder) {
 export class AiDigest extends ManagedAgent {
   private readonly agentEnv: ManagedEnv;
 
+  /** This actor's own state (actor-state.ts), beside ManagedAgent's keys. */
+  private async store(): Promise<AiDigestState> {
+    return ((await this.getState()) ?? {}) as AiDigestState;
+  }
+
+  /** Merge a patch into this actor's state: objects merge key by key, null deletes a key. */
+  private async save(patch: Patch<AiDigestState>): Promise<void> {
+    await this.setState(patch as Record<string, unknown>);
+  }
+
   /**
    * This actor's conversation name (ManagedAgent's conversationName(), private in its types);
    * undefined when the actor's id doesn't decode to one.
    */
   get conversation(): string | undefined {
-    return (this as unknown as { conversationName(): string }).conversationName();
+    return (this as unknown as { conversationName(): string | undefined }).conversationName();
   }
 
   constructor(ctx: ConstructorParameters<typeof ManagedAgent>[0], env: ManagedEnv) {
@@ -170,7 +181,7 @@ export class AiDigest extends ManagedAgent {
       ...base,
       TELNYX: {
         post: <T>(path: string, opts?: { body?: unknown; query?: Record<string, unknown> }) => {
-          const run = String((this as any).activeRunId ?? "");
+          const run = String((this as unknown as { activeRunId?: string }).activeRunId ?? "");
           if (this.toolUse.run !== run) this.toolUse = { run, search: 0, fetch: 0 };
           const refused = spendTool(budget, this.toolUse, path);
           if (refused) {
@@ -203,13 +214,13 @@ export class AiDigest extends ManagedAgent {
    */
   async prepareGeneralRun(run: { topic: string; window?: string; items?: string }) {
     const p = generalProfile(run.topic, run); // validates again
-    await (this as any).setState({ general: { topic: p.topic, window: `${p.windowDays}d`, items: `${p.items.min}-${p.items.max}` } });
+    await this.save({ general: { topic: p.topic, window: `${p.windowDays}d`, items: `${p.items.min}-${p.items.max}` } });
     return { topic: p.topic };
   }
 
   /** This conversation's General digest definition, or undefined (not a General run, or no topic stored). */
   async generalRun(): Promise<DigestProfile | undefined> {
-    const g = ((await (this as any).getState()) as any)?.general;
+    const g = (await this.store()).general;
     if (!g?.topic) return undefined;
     try {
       return generalProfile(g.topic, g);
@@ -221,24 +232,24 @@ export class AiDigest extends ManagedAgent {
   // ── watching: the run side (checks and issues) ──
 
   /** A check's window, stored in its conversation before the request (called in-process by the pool actor). */
-  async prepareCheckRun(run: { digest: string; slot: string; since: string; until: string }) {
-    await (this as any).setState({ checkRun: run });
+  async prepareCheckRun(run: CheckRun) {
+    await this.save({ checkRun: run });
   }
 
   /** An issue run's slot and stories, stored before the request (called in-process by the pool actor). */
   async prepareIssueRun(run: { slot: string; ids: string[] }) {
-    await (this as any).setState({ issueRun: run });
+    await this.save({ issueRun: run });
   }
 
   /** A check finished: validate and tag its candidates and hand them to the pool. */
-  private async deliverCheckReply(reply: string, run: { digest: string; slot: string; since: string; until: string }) {
+  private async deliverCheckReply(reply: string, run: CheckRun) {
     const { candidates, dropped, seen } = parseCheckReply(reply, run);
     const tags = await tagItems(this.agentEnv.TELNYX as any, candidates.map((c) => ({ headline: c.headline, why: c.summary || c.why })));
     // Variety: at most two candidates about the same product per check.
     const { kept: tagged, capped } = capPerEntity<Candidate>(candidates.map((c, k) => ({ ...c, tags: tags[k]?.tags ?? [], entities: tags[k]?.entities ?? [] })));
     console.log(JSON.stringify({ watch: "check done", digest: run.digest, slot: run.slot, candidates: tagged.length, seen: seen.length, dropped, capped }));
     // Delivered by a durable task: retried with backoff until the pool takes it (a hung or failed call can't lose a check).
-    await (this as any).schedule(0, "deliverToPool", { digest: run.digest, slot: run.slot, candidates: tagged, seen, dropped: dropped + capped }, { id: "deliver", maxRetries: 8 });
+    await this.schedule(0, "deliverToPool", { digest: run.digest, slot: run.slot, candidates: tagged, seen, dropped: dropped + capped }, { id: "deliver", maxRetries: 8 });
   }
 
   /**
@@ -247,9 +258,9 @@ export class AiDigest extends ManagedAgent {
    * last reply again. Returns whether there was a reply to deliver.
    */
   async recoverCheck() {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     if (!state?.checkRun) return { delivered: false, reason: "not a check" };
-    const msgs = (await (this as any).messages.all()) as { role: string; content: string }[];
+    const msgs = (await this.messages.all()) as { role: string; content: string }[];
     const reply = [...msgs].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content;
     if (!reply) return { delivered: false, reason: "no reply" };
     await this.deliverCheckReply(reply, state.checkRun);
@@ -270,8 +281,8 @@ export class AiDigest extends ManagedAgent {
     return id;
   }
 
-  private async poolState(): Promise<{ entries: PoolEntry[]; meta: any }> {
-    const state: any = await (this as any).getState();
+  private async poolState(): Promise<{ entries: PoolEntry[]; meta: PoolMeta }> {
+    const state = await this.store();
     return { entries: Object.values(state?.poolEntries ?? {}).filter(Boolean) as PoolEntry[], meta: state?.poolMeta ?? {} };
   }
 
@@ -281,7 +292,7 @@ export class AiDigest extends ManagedAgent {
     const patch: Record<string, PoolEntry | null> = {};
     for (const e of after) if (old.get(e.id) !== JSON.stringify(e)) patch[e.id] = e;
     for (const id of old.keys()) if (!after.some((e) => e.id === id)) patch[id] = null;
-    await (this as any).setState({ poolEntries: patch, poolMeta: meta });
+    await this.save({ poolEntries: patch, poolMeta: meta });
   }
 
   /**
@@ -295,29 +306,29 @@ export class AiDigest extends ManagedAgent {
     const s = watchSettings(await loadProfile(this.agentEnv, id));
     const { meta } = await this.poolState();
     if (!s) {
-      await (this as any).cancelSchedule("watch").catch(() => false);
-      if (meta.enabledAt) await (this as any).setState({ poolMeta: { enabledAt: null, watchHours: null } });
+      await this.cancelSchedule("watch").catch(() => false);
+      if (meta.enabledAt) await this.save({ poolMeta: { enabledAt: null, watchHours: null } });
       return { digest: id, watching: false };
     }
     // An armed timer with the same interval is left alone, so deploys (which store every
     // definition again) don't line all digests' checks up; a missing one is re-armed.
-    const tasks: any[] = await (this as any).listSchedules().catch(() => []);
+    const tasks = await this.listSchedules().catch(() => []);
     const armed = tasks.find((t) => t.id === "watch");
     if (armed && !armed.everyMs && meta.watchHours === s.watchHours) return { digest: id, watching: true, everyHours: s.watchHours, kept: true };
     const now = new Date().toISOString();
-    await (this as any).setState({ poolMeta: { watchHours: s.watchHours, ...(meta.enabledAt ? {} : { enabledAt: now, lastIssueAt: meta.lastIssueAt ?? now }) } });
+    await this.save({ poolMeta: { watchHours: s.watchHours, ...(meta.enabledAt ? {} : { enabledAt: now, lastIssueAt: meta.lastIssueAt ?? now }) } });
     const delay = firstCheckDelayS();
-    await (this as any).schedule(delay, "watchTick", {}, { id: "watch" });
+    await this.schedule(delay, "watchTick", {}, { id: "watch" });
     return { digest: id, watching: true, everyHours: s.watchHours, firstCheckInMin: Math.round(delay / 60) };
   }
 
   /** The digest was deleted: stop its timer and forget its pool (a new digest with the same name starts empty). */
   async poolDelete() {
     const id = this.poolDigest();
-    const tasks: any[] = await (this as any).listSchedules().catch(() => []);
-    for (const t of [...tasks.map((t) => t.id), "watch"]) await (this as any).cancelSchedule(t).catch(() => false);
+    const tasks = await this.listSchedules().catch(() => []);
+    for (const t of [...tasks.map((t) => t.id), "watch"]) await this.cancelSchedule(t).catch(() => false);
     const { entries } = await this.poolState();
-    await (this as any).setState({ poolEntries: null, poolMeta: null });
+    await this.save({ poolEntries: null, poolMeta: null });
     console.log(JSON.stringify({ pool: "deleted", digest: id, entries: entries.length }));
     return { digest: id, watching: false, cleared: entries.length };
   }
@@ -328,11 +339,11 @@ export class AiDigest extends ManagedAgent {
     // The next tick; if the definition can't be read right now, the last known interval keeps the chain going.
     let hours: number | undefined;
     try {
-      hours = watchSettings(await digestsActor(this.agentEnv).getDigest(this.poolDigest()).then((d: any) => (d ? parseProfile(d.id, d.markdown) : undefined)))?.watchHours;
+      hours = watchSettings(await digestsActor(this.agentEnv).getDigest(this.poolDigest()).then((d) => (d ? parseProfile(d.id, d.markdown) : undefined)))?.watchHours;
     } catch {
       hours = (await this.poolState()).meta.watchHours ?? undefined;
     }
-    if (hours) await (this as any).schedule(nextCheckDelayS(hours), "watchTick", {}, { id: "watch" });
+    if (hours) await this.schedule(nextCheckDelayS(hours), "watchTick", {}, { id: "watch" });
   }
 
   /**
@@ -358,7 +369,7 @@ export class AiDigest extends ManagedAgent {
       // else re-deliver its reply (e.g. the runtime restarted before its post-run hook), else give it up.
       if (age < CHECK_TIMEOUT_MS) {
         if (await this.checkStillRunning(running)) return { ok: false, error: "a check is still running", conversation: running };
-        const r = await (this.agentEnv as any).AI_DIGEST.idFromName(running).recoverCheck().catch(() => ({ delivered: false, reason: "unreachable" }));
+        const r = await actorNamed(this.agentEnv, running).recoverCheck().catch(() => ({ delivered: false, reason: "unreachable" }));
         if (r.delivered) {
           console.log(JSON.stringify({ watch: "recovered", digest: id, conversation: running }));
           return { ok: false, error: "the previous check's reply was delivered again; start a new check in a minute", conversation: running };
@@ -374,15 +385,15 @@ export class AiDigest extends ManagedAgent {
       .filter((e) => e.state !== "expired")
       .sort((a, b) => b.firstSeen.localeCompare(a.firstSeen))
       .map((e) => ({ id: e.id, headline: e.headline }));
-    await (this as any).setState({ poolMeta: { checkRunning: { slot, startedAt: now.toISOString(), since, until, decide: opts.decide ?? true, force: opts.force ?? null } } });
+    await this.save({ poolMeta: { checkRunning: { slot, startedAt: now.toISOString(), since, until, decide: opts.decide ?? true, force: opts.force ?? null } } });
     // The run starts on an immediate task, so the caller (an API request) doesn't wait for actor start-ups.
-    await (this as any).schedule(0, "runCheck", { slot, since, until, known }, { id: `check-${slot}` });
+    await this.schedule(0, "runCheck", { slot, since, until, known }, { id: `check-${slot}` });
     return { ok: true, conversation, since, until };
   }
 
   /** Whether a check's conversation still has a run in progress (its latest trace). */
   private async checkStillRunning(conversation: string): Promise<boolean> {
-    const t = await (this.agentEnv as any).AI_DIGEST.idFromName(conversation).traces(1).catch(() => undefined);
+    const t = await actorNamed(this.agentEnv, conversation).traces(1).catch(() => undefined);
     const status = t?.runs?.[0]?.status;
     return status === "running" || status === "accepted" || status === "queued";
   }
@@ -398,12 +409,12 @@ export class AiDigest extends ManagedAgent {
     if (!lease.ok) {
       const wait = leaseWaitS(lease.retryInS);
       // Still due, just waiting: keep the check from counting as stale meanwhile.
-      await (this as any).setState({ poolMeta: { checkRunning: { startedAt: new Date().toISOString() } } });
-      await (this as any).schedule(wait, "runCheck", p, { id: `check-${p.slot}-wait-${Date.now()}` });
+      await this.save({ poolMeta: { checkRunning: { startedAt: new Date().toISOString() } } });
+      await this.schedule(wait, "runCheck", p, { id: `check-${p.slot}-wait-${Date.now()}` });
       console.log(JSON.stringify({ watch: "waiting", digest: id, slot: p.slot, holder: lease.holder, retryInS: wait }));
       return;
     }
-    const run = (this.agentEnv as any).AI_DIGEST.idFromName(conversation);
+    const run = actorNamed(this.agentEnv, conversation);
     await run.prepareCheckRun({ digest: id, slot: p.slot, since: p.since, until: p.until });
     await run.receive(checkMessage(profile, { since: p.since, until: p.until, known: p.known }));
     console.log(JSON.stringify({ watch: "check started", digest: id, conversation, since: p.since, until: p.until }));
@@ -441,7 +452,7 @@ export class AiDigest extends ManagedAgent {
   /** Write an issue from the pool now, without a check (a manual run with watching off for this run). Queued, so the caller doesn't wait. */
   async writeNow(opts: { focus?: string } = {}) {
     const id = this.poolDigest();
-    await (this as any).schedule(0, "runWriteNow", opts, { id: "write-now" });
+    await this.schedule(0, "runWriteNow", opts, { id: "write-now" });
     return { ok: true, queued: true, digest: id };
   }
 
@@ -465,13 +476,13 @@ export class AiDigest extends ManagedAgent {
     return housekeep(rescore(pool, prefs, shared, now), profile?.windowDays ?? 7, now);
   }
 
-  private decision(pool: PoolEntry[], profile: DigestProfile, meta: any, now: string, force: boolean): Decision {
+  private decision(pool: PoolEntry[], profile: DigestProfile, meta: PoolMeta, now: string, force: boolean): Decision {
     const s = watchSettings(profile) ?? { watchHours: 24, sendAt: profile.items.min, strong: 7, minGapDays: 0, maxGapDays: 30 };
     return decide(pool, s, meta.lastIssueAt ?? meta.enabledAt ?? now, now, profile.items.max, force);
   }
 
   /** Reserve the chosen stories and start the writer run (or email the quiet note when there are none). */
-  private async startIssue(id: string, profile: DigestProfile, pool: PoolEntry[], d: Decision, meta: any, focus?: string, fromCheck?: string) {
+  private async startIssue(id: string, profile: DigestProfile, pool: PoolEntry[], d: Decision, meta: PoolMeta, focus?: string, fromCheck?: string) {
     const now = new Date().toISOString();
     const ids = d.action === "none" ? [] : d.ids;
     if (ids.length) {
@@ -479,7 +490,7 @@ export class AiDigest extends ManagedAgent {
       const lease = await digestsActor(this.agentEnv).claimRun(`${id}--issue-${slotOf(now)}`, fromCheck);
       if (!lease.ok) {
         const wait = leaseWaitS(lease.retryInS);
-        await (this as any).schedule(wait, "runWriteNow", { focus }, { id: `write-wait-${Date.now()}` });
+        await this.schedule(wait, "runWriteNow", { focus }, { id: `write-wait-${Date.now()}` });
         console.log(JSON.stringify({ pool: "issue waiting", digest: id, holder: lease.holder, retryInS: wait }));
         return { conversation: null, stories: 0, waiting: true };
       }
@@ -487,7 +498,7 @@ export class AiDigest extends ManagedAgent {
     if (!ids.length) {
       const note = quietNote(profile, meta.lastIssueAt ?? meta.enabledAt ?? now, now);
       const r = await sendDigestEmail(this.agentEnv, { ...note, profileId: id, profile });
-      await (this as any).setState({ poolMeta: { lastIssueAt: now, lastIssue: { slot: slotOf(now), at: now, stories: 0, quiet: true } } });
+      await this.save({ poolMeta: { lastIssueAt: now, lastIssue: { slot: slotOf(now), at: now, stories: 0, quiet: true } } });
       console.log(JSON.stringify({ pool: "quiet note", digest: id, ok: r.ok }));
       return { conversation: null, stories: 0 };
     }
@@ -496,7 +507,7 @@ export class AiDigest extends ManagedAgent {
     const chosen = ids.map((x) => pool.find((e) => e.id === x)!).filter(Boolean);
     const reserved = pool.map((e) => (ids.includes(e.id) ? { ...e, state: "reserved" as const, issue: slot, reservedAt: now } : e));
     await this.savePool(pool, reserved, { issueRunning: { slot, startedAt: now, stories: ids.length } });
-    const run = (this.agentEnv as any).AI_DIGEST.idFromName(conversation);
+    const run = actorNamed(this.agentEnv, conversation);
     await run.prepareIssueRun({ slot, ids });
     const s = watchSettings(profile);
     await run.receive(writerMessage(profile, chosen, { quiet: d.action === "issue-anyway" && !!s && d.strong < s.sendAt, focus }));
@@ -532,8 +543,8 @@ export class AiDigest extends ManagedAgent {
     const id = this.poolDigest();
     const profile = await loadProfile(this.agentEnv, id);
     const { entries, meta } = await this.poolState();
-    const tasks: any[] = await (this as any).listSchedules().catch(() => []);
-    const next = tasks.filter((t) => t.name === "watchTick").map((t) => t.dueAt ?? t.due ?? t.at ?? t.nextAt).filter(Boolean).sort()[0];
+    const tasks = await this.listSchedules().catch(() => []);
+    const next = tasks.filter((t) => t.name === "watchTick").map((t) => t.due).filter(Boolean).sort((a, b) => a - b)[0];
     const order: Record<string, number> = { candidate: 0, reserved: 1, sent: 2, expired: 3 };
     const sorted = [...entries].sort((a, b) => order[a.state]! - order[b.state]! || b.score - a.score);
     const s = watchSettings(profile);
@@ -563,7 +574,7 @@ export class AiDigest extends ManagedAgent {
 
   /** A digest was emailed from this conversation now (guards against a second send for the same run). */
   async markEmailed() {
-    await (this as any).setState({ emailedAt: Date.now() });
+    await this.save({ emailedAt: Date.now() });
   }
 
   /**
@@ -579,9 +590,9 @@ export class AiDigest extends ManagedAgent {
     if (conversation === FEEDBACK_CONVERSATION || conversation === DIGESTS_CONVERSATION) return;
     try {
       const started = Number(runId.match(/-(\d{13})-/)?.[1] ?? 0);
-      const state: any = await (this as any).getState();
+      const state = await this.store();
       if (started && (state?.emailedAt ?? 0) >= started) return;
-      const msgs = ((await (this as any).messages.all()) as { seq: number; role: string; content: string }[]).filter((m) => m.seq > before);
+      const msgs = ((await this.messages.all()) as { seq: number; role: string; content: string }[]).filter((m) => m.seq > before);
       const reply = [...msgs].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content ?? "";
       // A check: hand its candidates to the pool; never emailed.
       if (state?.checkRun) return await this.deliverCheckReply(reply, state.checkRun);
@@ -598,7 +609,7 @@ export class AiDigest extends ManagedAgent {
         const urls = [...markdown.matchAll(/\]\((https?:[^)\s]+)\)/g)].map((m) => m[1]!);
         await poolActor(this.agentEnv, profileId).markSent({ slot: state.issueRun.slot, urls }).catch((err: unknown) => console.log(JSON.stringify({ pool: "markSent failed", error: String(err) })));
       }
-      console.log(JSON.stringify({ digestEmail: result.ok ? "sent" : "failed", runId, ...(result.ok ? { id: (result as any).id } : { error: (result as any).error }) }));
+      console.log(JSON.stringify({ digestEmail: result.ok ? "sent" : "failed", runId, ...(result.ok ? { id: result.id } : { error: result.error }) }));
     } catch (err) {
       console.log(JSON.stringify({ digestEmail: "error", runId, error: err instanceof Error ? err.message : String(err) }));
     }
@@ -635,7 +646,7 @@ export class AiDigest extends ManagedAgent {
     const key = await feedbackKey(this.agentEnv);
     const id = url.searchParams.get("view") ?? "";
     if (!key || !(await verifyView(key, id, url.searchParams.get("s") ?? ""))) return errorPage(400, "The link is invalid.");
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const digest: DigestRecord | undefined = state?.digests?.[id];
     if (!digest?.html) return errorPage(404, "That digest is no longer stored.");
     return new Response(digest.html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" } });
@@ -647,7 +658,7 @@ export class AiDigest extends ManagedAgent {
     const p = await verifyPayload(key, url.searchParams.get("p") ?? "", url.searchParams.get("s") ?? "");
     if (!p) return errorPage(400, "The link is invalid or has expired.");
     const id = `${p.d}:${p.i}`;
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const digest: DigestRecord | undefined = state?.digests?.[p.d];
     const item = digest?.items.find((i) => i.n === p.i);
     const prior: StoredVote | undefined = state?.votes?.[id];
@@ -697,7 +708,7 @@ export class AiDigest extends ManagedAgent {
         console.log(JSON.stringify({ feedback: "memory write failed", via, id, error: String(err) }));
         return prior?.memorySource;
       });
-      await (this as any).setState({ votes: { [id]: vote } });
+      await this.save({ votes: { [id]: vote } });
     }
     console.log(JSON.stringify({ feedback: "vote", via, id, vote: vote.vote, reasons: selectionsOf(vote), entities: vote.entities, tags: vote.tags, changed: write }));
   }
@@ -706,7 +717,7 @@ export class AiDigest extends ManagedAgent {
   private async removeVote(id: string, prior: StoredVote | undefined, profile: string, via: string) {
     if (prior) {
       await forgetVote(this.agentEnv.TELNYX as any, profile, prior.memorySource).catch((err: unknown) => console.log(JSON.stringify({ feedback: "memory delete failed", via, id, error: String(err) })));
-      await (this as any).setState({ votes: { [id]: null } });
+      await this.save({ votes: { [id]: null } });
       // Ingestion is asynchronous: a memory still being extracted can land after this delete. Delete again later.
       if (prior.memorySource) await this.later(120, "forgetMemorySourceLater", { source: prior.memorySource, profile });
     }
@@ -716,7 +727,7 @@ export class AiDigest extends ManagedAgent {
   /** Schedule one of the methods below; a failure to schedule is logged, never thrown at the reader. */
   private async later(seconds: number, method: string, payload: unknown, id?: string) {
     try {
-      await (this as any).schedule(seconds, method, payload, id ? { id } : undefined);
+      await this.schedule(seconds, method, payload, id ? { id } : undefined);
     } catch (err) {
       console.log(JSON.stringify({ feedback: "schedule failed", method, error: err instanceof Error ? err.message : String(err) }));
     }
@@ -734,16 +745,16 @@ export class AiDigest extends ManagedAgent {
    * Called in-process when a digest is emailed; not @rpc, so not on the public mount.
    */
   async registerDigest(record: DigestRecord) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const older = (Object.values(state?.digests ?? {}).filter(Boolean) as DigestRecord[]).filter((d) => d.id !== record.id);
     const changes = retainIssues(older, Date.now(), TALK_TTL_S * 1000);
-    await (this as any).setState({ digests: { ...changes, [record.id]: record } });
+    await this.save({ digests: { ...changes, [record.id]: record } });
     return { stored: record.id, dropped: Object.values(changes).filter((c) => c === null).length };
   }
 
   /** A stored issue, for talking about it. Called in-process by the router; not @rpc. */
   async issueRecord(id: string): Promise<DigestRecord | undefined> {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     return state?.digests?.[id] ?? undefined;
   }
 
@@ -753,20 +764,20 @@ export class AiDigest extends ManagedAgent {
    * retainIssues keeps issues that much past talkUntil, so every link minted stays covered. Called in-process; not @rpc.
    */
   async keepIssueUntil(id: string, until: string) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const d: DigestRecord | undefined = state?.digests?.[id];
     if (!d) return { ok: false };
     const now = Date.parse(until), was = Date.parse(d.talkUntil ?? "") || 0;
-    if (now - was > TALK_UNTIL_SLACK_MS) await (this as any).setState({ digests: { [id]: { ...d, talkUntil: until } } });
+    if (now - was > TALK_UNTIL_SLACK_MS) await this.save({ digests: { [id]: { ...d, talkUntil: until } } });
     return { ok: true };
   }
 
   /** Replace a stored issue's email HTML (after adding talk links to it). Called in-process; not @rpc. */
   async setIssueHtml(id: string, html: string, talkUntil?: string) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const d: DigestRecord | undefined = state?.digests?.[id];
     if (!d) return { ok: false };
-    await (this as any).setState({ digests: { [id]: { ...d, html, ...(talkUntil ? { talkUntil } : {}) } } });
+    await this.save({ digests: { [id]: { ...d, html, ...(talkUntil ? { talkUntil } : {}) } } });
     return { ok: true };
   }
 
@@ -779,8 +790,8 @@ export class AiDigest extends ManagedAgent {
    */
   async spendTalkTool(issue: string, tool: TalkTool): Promise<string | undefined> {
     this.talkUse ??= (async () => {
-      const state: any = await (this as any).getState();
-      return (state?.talkUse as TalkUsage | undefined) ?? { day: "", total: {}, issues: {} };
+      const state = await this.store();
+      return state.talkUse ?? { day: "", total: {}, issues: {} };
     })();
     const use = await this.talkUse;
     const before = use.day;
@@ -789,8 +800,8 @@ export class AiDigest extends ManagedAgent {
     if (refused) console.log(JSON.stringify({ talk: "tool limit", tool, issue, day: use.day }));
     else {
       // A new day starts from nothing: clear the stored counts first (setState merges objects).
-      if (before && before !== use.day) await (this as any).setState({ talkUse: null });
-      await (this as any).setState({ talkUse: structuredClone(use) });
+      if (before && before !== use.day) await this.save({ talkUse: null });
+      await this.save({ talkUse: structuredClone(use) });
     }
     return refused;
   }
@@ -802,7 +813,7 @@ export class AiDigest extends ManagedAgent {
    * Called in-process by the router; not @rpc.
    */
   async talkVote(p: { d: string; i: number; v: "up" | "down"; r?: string; x?: number; undo?: boolean; via?: string }) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const digest: DigestRecord | undefined = state?.digests?.[p.d];
     const item = digest?.items.find((i) => i.n === p.i);
     if (!digest || !item) return { ok: false, error: "no such story in this issue" };
@@ -813,7 +824,7 @@ export class AiDigest extends ManagedAgent {
       await this.removeVote(id, prior, profile, p.via ?? "talk");
       return { ok: true, story: p.i, vote: null, reasons: [] };
     }
-    const reason = p.r && validReason(p.v, p.r) ? (p.r as any) : undefined;
+    const reason = p.r && validReason(p.v, p.r) ? p.r : undefined;
     const x = reason === "entity" && validEntityIndex(p.x) ? p.x : undefined;
     // A reason applies to a vote of the same kind: cast the vote first when there isn't one.
     let base = prior;
@@ -826,7 +837,7 @@ export class AiDigest extends ManagedAgent {
 
   /** The votes on one issue's stories, for the talk page: item number → vote and reasons. Called in-process; not @rpc. */
   async issueVotes(d: string) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const out: Record<number, { vote: string; reasons: { r: string; target?: string }[] }> = {};
     for (const v of Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]) if (v.digest === d) out[v.item] = { vote: v.vote, reasons: selectionsOf(v) };
     return out;
@@ -834,7 +845,7 @@ export class AiDigest extends ManagedAgent {
 
   /** For the page: sent issues (newest first) and votes per digest. Called in-process; not @rpc. */
   async appOverview() {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const issues = (Object.values(state?.digests ?? {}).filter(Boolean) as DigestRecord[])
       .map((d) => ({ id: d.id, profile: d.profile ?? LEGACY_PROFILE, ...(d.topic ? { topic: d.topic } : {}), subject: d.subject, sentAt: d.sentAt, items: d.items.length }))
       .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
@@ -845,7 +856,7 @@ export class AiDigest extends ManagedAgent {
 
   /** One digest's preferences from the vote log, for `reader_preferences`. Called in-process; not @rpc. */
   async feedbackStats(profile: string = LEGACY_PROFILE) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const votes = (Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[]).filter((v) => (v.profile ?? LEGACY_PROFILE) === profile);
     return preferencesFrom(votes);
   }
@@ -856,7 +867,7 @@ export class AiDigest extends ManagedAgent {
    * run's topic, never hidden by a shared "I don't use". Called in-process; not @rpc.
    */
   async sharedPreferences(profile: string = LEGACY_PROFILE, topic?: string) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const all = Object.values(state?.votes ?? {}).filter(Boolean) as StoredVote[];
     const own = preferencesFrom(all.filter((v) => (v.profile ?? LEGACY_PROFILE) === profile)).entities.map((e) => e.name);
     return sharedEntityPrefs(all, { profile, own, topic, legacyProfile: LEGACY_PROFILE });
@@ -866,33 +877,33 @@ export class AiDigest extends ManagedAgent {
 
   /** Every stored digest: id, title, window, items, watching settings, when it changed. */
   async listDigests() {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     return Object.values(state?.profiles ?? {})
       .filter(Boolean)
-      .map((d: any) => {
+      .map((d) => {
         let p: DigestProfile | undefined;
         try {
           p = parseProfile(d.id, d.markdown);
         } catch {}
         return { id: d.id, title: p?.title ?? null, windowDays: p?.windowDays ?? null, items: p?.items ?? null, watch: p?.watch ?? null, updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 };
       })
-      .sort((a: any, b: any) => a.id.localeCompare(b.id));
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   /** One digest's definition (Markdown), or null. */
   async getDigest(id: string) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const d = state?.profiles?.[id];
     return d ? { id, markdown: d.markdown, updatedAt: d.updatedAt, versions: (d.history?.length ?? 0) + 1 } : null;
   }
 
   /** Store a digest's definition (validated by the router), keeping the previous versions. */
   async putDigest(id: string, markdown: string) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const prev = state?.profiles?.[id];
     if (prev && prev.markdown === markdown) return { id, changed: false, versions: (prev.history?.length ?? 0) + 1 };
     const history = prev ? [{ markdown: prev.markdown, updatedAt: prev.updatedAt }, ...(prev.history ?? [])].slice(0, KEEP_VERSIONS - 1) : [];
-    await (this as any).setState({ profiles: { [id]: { id, markdown, updatedAt: new Date().toISOString(), history } } });
+    await this.save({ profiles: { [id]: { id, markdown, updatedAt: new Date().toISOString(), history } } });
     console.log(JSON.stringify({ digests: prev ? "updated" : "created", id }));
     return { id, changed: true, versions: history.length + 1 };
   }
@@ -905,7 +916,7 @@ export class AiDigest extends ManagedAgent {
    */
   async queueEmail(mail: { to: string; subject: string; text: string; html: string }) {
     try {
-      await (this as any).schedule(0, "sendQueuedEmail", mail);
+      await this.schedule(0, "sendQueuedEmail", mail);
       return true;
     } catch (err) {
       console.log(JSON.stringify({ email: "schedule failed", error: err instanceof Error ? err.message : String(err) }));
@@ -927,43 +938,43 @@ export class AiDigest extends ManagedAgent {
 
   /** The run lease (one check or issue at a time across digests; pool.ts). Called in-process by pool actors. */
   async claimRun(owner: string, from?: string) {
-    const state: any = await (this as any).getState();
-    const r = claimLease(state?.runLease as RunLease | undefined, owner, Date.now(), from);
-    if (r.ok) await (this as any).setState({ runLease: r.lease });
+    const state = await this.store();
+    const r = claimLease(state.runLease, owner, Date.now(), from);
+    if (r.ok) await this.save({ runLease: r.lease });
     return r.ok ? { ok: true as const } : r;
   }
 
   async releaseRun(owner: string) {
-    const state: any = await (this as any).getState();
-    if (releasesLease(state?.runLease, owner)) await (this as any).setState({ runLease: null });
+    const state = await this.store();
+    if (releasesLease(state?.runLease, owner)) await this.save({ runLease: null });
     return { released: releasesLease(state?.runLease, owner) };
   }
 
   /** Sign-in links: at most one a minute. Called in-process by the page. */
   async magicRequested(now: number) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const last = state?.magicRequestedAt ?? 0;
     if (now - last < 60_000) return { ok: false, retryIn: Math.ceil((60_000 - (now - last)) / 1000) };
-    await (this as any).setState({ magicRequestedAt: now });
+    await this.save({ magicRequestedAt: now });
     return { ok: true };
   }
 
   /** A sign-in link works once: false when its nonce was used already. Expired nonces are forgotten. */
   async consumeMagic(nonce: string, exp: number) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     const used: Record<string, number> = state?.magicUsed ?? {};
     if (used[nonce]) return false;
     const nowS = Math.floor(Date.now() / 1000);
     const expired = Object.fromEntries(Object.entries(used).filter(([, e]) => e < nowS).map(([n]) => [n, null]));
-    await (this as any).setState({ magicUsed: { ...expired, [nonce]: exp } });
+    await this.save({ magicUsed: { ...expired, [nonce]: exp } });
     return true;
   }
 
   /** Delete a digest's definition (its sent issues, votes and memory stay). */
   async deleteDigest(id: string) {
-    const state: any = await (this as any).getState();
+    const state = await this.store();
     if (!state?.profiles?.[id]) return { id, deleted: false };
-    await (this as any).setState({ profiles: { [id]: null } });
+    await this.save({ profiles: { [id]: null } });
     console.log(JSON.stringify({ digests: "deleted", id }));
     return { id, deleted: true };
   }

@@ -25,8 +25,13 @@ export const SECRET = {
   talkAssistant: "TALK_ASSISTANT_ID",
 } as const;
 
-export async function secret(env: ManagedEnv, name: string): Promise<string | undefined> {
-  const store = (env as any).SECRETS;
+/** The SECRETS binding, on the actor's env and the router's alike. */
+export interface SecretStore {
+  get(name: string): Promise<string>;
+}
+
+export async function secret(env: ManagedEnv | { SECRETS?: SecretStore }, name: string): Promise<string | undefined> {
+  const store = (env as { SECRETS?: SecretStore }).SECRETS;
   if (!store) return undefined;
   const v = await store.get(name).catch(() => "");
   return typeof v === "string" && v.trim() ? v.trim() : undefined;

@@ -6,7 +6,7 @@ Context for a coding agent working in this repository: an AI agent on Telnyx Edg
 |---|---|---|
 | `src/index.ts`, `src/router.ts` | The function's entry point and the v1 API (the only HTTP surface) | you |
 | `src/agent.ts` | The agent class: the post-run hook, the `feedback`, `digests` and pool actors, web tool budgets | you |
-| `src/email.ts`, `src/delivery.ts`, `src/actors.ts` | The email template and sending; delivering a finished digest (pictures, thumbs and talk links, registering the issue); the actors by name | you |
+| `src/email.ts`, `src/delivery.ts`, `src/actors.ts`, `src/actor-state.ts` | The email template and sending; delivering a finished digest (pictures, thumbs and talk links, registering the issue); the actors by name; what each actor role keeps in its state | you |
 | `src/profile.ts` | Digest definitions: parsing, validation, the run request | you |
 | `src/instructions.ts` | How the research model researches and writes any digest | you |
 | `src/pool.ts`, `src/watch-instructions.ts` | Watching digests (`watch:`): the candidate pool, scoring and send decisions; the check and issue-writing requests | you |

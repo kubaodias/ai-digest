@@ -21,7 +21,6 @@ import {
 } from "./preferences.ts";
 
 /** The conversation (actor) that owns the vote log and the stored digests. */
-export const FEEDBACK_CONVERSATION = "feedback";
 export const MEMORY_NAMESPACE = "ai-digest";
 
 /** The feedback URL under the function's public URL: thumbs links and the digest web view (API v1). */

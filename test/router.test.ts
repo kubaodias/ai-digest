@@ -13,7 +13,8 @@ const example = readFileSync(new URL("../examples/digests/agent-memory.md", impo
 function fakeEnv(key: string | undefined = KEY) {
   const calls: { actor: string; method: string; args: unknown[] }[] = [];
   const store = new Map<string, string>();
-  const env: RouterEnv = {
+  // Partial actors: only what the router calls. The cast is the one place the fakes meet the real type.
+  const env = {
     SECRETS: { get: async (n: string) => (n === "AGENT_AUTH_KEY" && key ? key : "") },
     AI_DIGEST: {
       idFromName(name: string) {
@@ -35,7 +36,7 @@ function fakeEnv(key: string | undefined = KEY) {
         };
       },
     },
-  };
+  } as unknown as RouterEnv;
   return { env, calls, store };
 }
 const auth = async () => ({ authorization: `Bearer ${await operatorToken(KEY)}` });
@@ -145,10 +146,10 @@ test("with PUBLIC_URL set (e.g. a custom domain), links are built from it, not f
   assert.equal(asPublic(inner, "not a url").url, "https://ai-digest-0000.telnyxcompute.com/v1/app/sign-in?x=1");
   assert.equal(asPublic(new Request("http://localhost:8787/v1/app"), "https://digest.example.com").url, "http://localhost:8787/v1/app", "local development unchanged");
   const forwarded: string[] = [];
-  const custom: RouterEnv = {
+  const custom = {
     SECRETS: { get: async (n: string) => (n === "PUBLIC_URL" ? "https://digest.example.com" : "") },
     AI_DIGEST: { idFromName: () => ({ fetch: async (r: Request) => (forwarded.push(r.url), new Response("ok")) }) },
-  };
+  } as unknown as RouterEnv;
   await route(new Request("http://ai-digest-0000.telnyxcompute.com/v1/feedback?p=x&s=y"), custom);
   assert.equal(forwarded[0], "https://digest.example.com/v1/feedback?p=x&s=y", "the feedback actor builds its links from the public URL");
 });

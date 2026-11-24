@@ -10,11 +10,16 @@ import { addImages } from "./images.ts";
 import { audienceOf, type DigestProfile } from "./profile.ts";
 import { addTalkLinkText, addTalkLinks, talkBase, talkLinks } from "./talk.ts";
 
+/** How sending a digest went: the email's id and status from the API, or why nothing was sent. */
+export type Delivery =
+  | { ok: true; id?: string; status?: string; imagesAdded: number; feedbackItems: number; digestId: string }
+  | { ok: false; error: string };
+
 /** Emailing a finished digest: pictures, thumbs links, render, send, and register the digest with the feedback actor. */
 export async function sendDigestEmail(
   env: ManagedEnv,
   { subject, markdown, profileId, profile }: { subject: string; markdown: string; profileId: string; profile?: DigestProfile },
-) {
+): Promise<Delivery> {
   const started = Date.now();
   const telnyx = env.TELNYX as any;
   if (!telnyx) return { ok: false, error: "no TELNYX binding" };
